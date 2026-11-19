@@ -3,27 +3,15 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.2'
+$global:appVersion = '2026-11-19.3'
 
-# ---- Windows helpers (find the Messages window, pill that does not steal focus) ----
-$cs = @"
-using System;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
-public static class OsWin {
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+# ---- only one copy running: if already running, ask it to show the window ----
+$created = $false
+$global:mutex = New-Object System.Threading.Mutex($true, 'Local\OfficeSignalApp', [ref]$created)
+if (-not $created) {
+  try { ([System.Threading.EventWaitHandle]::OpenExisting('Local\OfficeSignalShow')).Set() | Out-Null } catch {}
+  return
 }
-public class OsPillForm : Form {
-  public OsPillForm() { this.DoubleBuffered = true; }
-  protected override bool ShowWithoutActivation { get { return true; } }
-  protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ExStyle |= 0x00000080 | 0x00000008; return cp; } }
-}
-"@
-Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms, System.Drawing -ErrorAction Stop
 
 # ---- who am I (asked once, saved) ----
 $global:dir = Join-Path $env:APPDATA 'OfficeSignal'
@@ -39,271 +27,682 @@ if (-not $global:myName) {
   [IO.File]::WriteAllLines($cfg, [string[]]@($global:myName, $global:myCid), (New-Object Text.UTF8Encoding $false))
 }
 
-# ---- the window page ----
-$global:htmlPath = Join-Path $global:dir 'mail.html'
-$html = @'
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Messages</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2333060a'/%3E%3Ctext x='32' y='43' font-family='Segoe UI,Arial' font-weight='600' font-size='28' fill='%23ff5c5c' text-anchor='middle'%3EOs%3C/text%3E%3C/svg%3E">
-<style>
-  *{box-sizing:border-box;min-width:0}
-  html,body{margin:0;height:100%}
-  body{background:#000;color:#e7e9ea;font:15px/1.4 "Segoe UI",system-ui,sans-serif;overflow:hidden}
-  svg{width:20px;height:20px;flex:none}
-  button{font:inherit;color:inherit}
-  #panel{position:fixed;inset:0;display:flex;flex-direction:column;background:#16181c}
-  header{display:flex;align-items:center;gap:10px;padding:14px 12px 12px 18px;border-bottom:1px solid #2f3336;flex:none}
-  .ttl{flex:1}
-  .ttl b{font-size:19px;font-weight:700;display:block;line-height:1.2}
-  .ttl small{font-size:13px;color:#71767b;display:flex;align-items:center;gap:6px}
-  .dot{width:8px;height:8px;border-radius:50%;background:#71767b}.dot.on{background:#00ba7c}
-  .ic{width:38px;height:38px;border-radius:8px;border:1px solid transparent;background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#e7e9ea}
-  .ic:hover{background:#2a2e33}.ic.out{border-color:#1d9bf0}
-  .sigs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px;border-bottom:1px solid #2f3336;flex:none}
-  .sigs button{height:44px;border:0;border-radius:999px;font-weight:700;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
-  .sigs button:active{transform:scale(.96)}
-  .s-red{background:#f4212e;color:#fff}.s-yel{background:#ffd400;color:#0f1419}.s-grn{background:#00ba7c;color:#fff}
-  #thread{flex:1;overflow-y:auto;padding:14px 14px 6px;display:flex;flex-direction:column;gap:4px}
-  #thread::-webkit-scrollbar{width:8px}#thread::-webkit-scrollbar-thumb{background:#2f3336;border-radius:4px}
-  .row{display:flex;flex-direction:column;max-width:78%}
-  .row.me{align-self:flex-end;align-items:flex-end}.row.them{align-self:flex-start;align-items:flex-start}
-  .bub{padding:9px 14px;border-radius:20px;white-space:pre-wrap;overflow-wrap:anywhere}
-  .me .bub{background:#1d9bf0;color:#fff;border-bottom-right-radius:6px}
-  .them .bub{background:#2f3336;border-bottom-left-radius:6px}
-  .meta{font-size:12px;color:#71767b;margin:3px 6px 8px}
-  .sig{align-self:center;display:flex;flex-direction:column;align-items:center;margin:8px 0}
-  .chip{padding:7px 16px;border-radius:999px;font-weight:700;font-size:13px;text-align:center}
-  .chip.red{background:#f4212e;color:#fff}.chip.yellow{background:#ffd400;color:#0f1419}.chip.green{background:#00ba7c;color:#fff}
-  .empty{margin:auto;color:#71767b;text-align:center}
-  .comp{padding:10px 12px 14px;border-top:1px solid #2f3336;flex:none}
-  .box{display:flex;align-items:flex-end;gap:6px;background:#202327;border-radius:16px;padding:6px 6px 6px 14px}
-  .box textarea{flex:1;background:transparent;border:0;outline:0;color:#e7e9ea;resize:none;font:15px/1.4 "Segoe UI",sans-serif;height:24px;max-height:110px;padding:6px 0}
-  .box textarea::placeholder{color:#71767b}
-  .send{width:36px;height:36px;border:0;border-radius:50%;background:transparent;color:#1d9bf0;cursor:pointer;display:flex;align-items:center;justify-content:center}
-  .send:hover{background:#1d9bf01a}
-  #status{font-size:12px;color:#f4212e;margin:6px 4px 0}
-  #status:empty{display:none}
-  .av{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;border:2px solid #202327}
-  #pill{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#000;padding:10px}
-  #pill button{width:100%;max-width:310px;height:62px;border-radius:999px;background:#202327;border:1px solid #2f3336;display:flex;align-items:center;gap:12px;padding:0 14px 0 22px;cursor:pointer;box-shadow:0 0 18px rgba(255,255,255,.08)}
-  #pill b{font-size:18px;flex:1;text-align:left}
-  .stack{display:flex}.stack .av{margin-left:-10px}
-  .badge{background:#1d9bf0;color:#fff;font-size:12px;font-weight:700;border-radius:999px;padding:1px 7px;display:none}
-  .toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#e7e9ea;color:#0f1419;font-weight:600;padding:8px 16px;border-radius:999px;font-size:13px;display:none;z-index:7;white-space:nowrap}
-  .dlg{position:fixed;inset:0;background:rgba(91,112,131,.4);display:none;align-items:center;justify-content:center;z-index:8;padding:20px}
-  .dlg .box2{background:#000;border-radius:16px;padding:24px;width:min(320px,100%);text-align:center}
-  .dlg h3{margin:0 0 6px;font-size:19px}.dlg p{margin:0 0 18px;color:#71767b}
-  .dlg button{display:block;width:100%;height:44px;border-radius:999px;font-weight:700;cursor:pointer;margin-top:10px}
-  #yes{background:#f4212e;border:0;color:#fff}#no{background:transparent;border:1px solid #536471;color:#e7e9ea}
-  #ov{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;z-index:9;cursor:pointer;padding:20px}
-  #ov h1{font-size:40px;margin:0;line-height:1.1}#ov p{font-size:18px;margin:0}
-  #ov.red{background:#f4212e;color:#fff;animation:fl .25s infinite alternate}#ov.yellow{background:#ffd400;color:#0f1419}#ov.green{background:#00ba7c;color:#fff}
-  @keyframes fl{to{background:#7a0000}}
-  @keyframes bl{0%,100%{background:#f4212e;border-color:#f4212e}50%{background:#7a0000;border-color:#7a0000}}
-  #pill.alert button{animation:bl .9s infinite;color:#fff}
-  body.wide .row{max-width:62%}
-</style></head><body>
-<div id="panel">
-  <header>
-    <div class="ttl"><b>Messages</b><small><span class="dot" id="dot"></span><span id="conn">Connecting...</span></small></div>
-    <button class="ic out" id="expand" type="button" title="Bigger window"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3h5v5M8 17H3v-5"/></svg></button>
-    <button class="ic" id="close" type="button" title="Close (the small Messages bar stays)"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m4 4 12 12M16 4 4 16"/></svg></button>
-  </header>
-  <div class="sigs">
-    <button class="s-red" data-c="red" type="button" title="His Messages bar blinks red">Emergency</button>
-    <button class="s-yel" data-c="yellow" type="button" title="His Messages bar blinks yellow">Come</button>
-    <button class="s-grn" data-c="green" type="button" title="His Messages bar blinks green">Call off</button>
-  </div>
-  <div id="thread"></div>
-  <div class="comp">
-    <form id="f" class="box"><textarea id="txt" rows="1" placeholder="Start a new message"></textarea>
-      <button class="send" title="Send"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2.5 9.5 17.5 3l-6.5 15-2.2-6.3z"/></svg></button></form>
-    <div id="status"></div>
-  </div>
-</div>
-<div id="pill"><button type="button" id="pillBtn"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2.5 9.5 17.5 3l-6.5 15-2.2-6.3z"/></svg><b>Messages</b><span class="badge" id="badge"></span><span class="stack" id="stack"></span></button></div>
-<div class="toast" id="toast"></div>
-<div class="dlg" id="dlg"><div class="box2"><h3>Send emergency?</h3><p>Your colleague's Messages bar will blink red.</p><button id="yes" type="button">Send emergency</button><button id="no" type="button">Cancel</button></div></div>
-<div id="ov"><h1 id="ovt"></h1><p id="ovm"></p></div>
-<script>
-{
-const TOPIC = '__TOPIC__';
-const SERVERS = ['https://ntfy.sh/' + TOPIC, 'https://ntfy.envs.net/' + TOPIC];
-const LABEL = {red:'EMERGENCY!', yellow:'COME PLEASE', green:'CALL OFF - BREAK'};
-const CHIP = {red:'Emergency', yellow:'Come please', green:'Call off - break'};
-const DOT = ' - ';
-const $ = id => document.getElementById(id);
-const hp = new URLSearchParams(location.hash.slice(1));
-const DESKTOP = !!hp.get('c');
-let name = hp.get('n') || localStorage.getItem('sigName');
-while(!name){ name = (prompt('Your name?')||'').trim(); }
-localStorage.setItem('sigName', name);
-let cid = hp.get('c') || localStorage.getItem('sigCid');
-if(!cid){ cid = Math.random().toString(36).slice(2,14); localStorage.setItem('sigCid', cid); }
+# ---- the app itself (native Windows window) ----
+$cs = @'
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Globalization;
+using System.IO;
+using System.Net;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
 
-const COLORS = ['#7856ff','#00ba7c','#f91880','#ff7a00','#1d9bf0','#d4a500'];
-const colorOf = s => { let h=0; for(const ch of s) h=(h*31+ch.charCodeAt(0))|0; return COLORS[Math.abs(h)%COLORS.length]; };
-const ini = s => s.trim().split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase() || '?';
-const thread = $('thread'), txt = $('txt'), st = $('status');
-const seen = new Set(), people = new Set();
-let unread = 0;
-const isMine = m => m.c ? m.c === cid : m.name === name;
-const fmt = t => { const d = new Date(t*1000), now = new Date();
-  const hm = d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-  return d.toDateString()===now.toDateString() ? hm : d.toLocaleDateString([], {weekday:'short'}) + ' ' + hm; };
-
-function renderStack(){
-  const s = $('stack'); s.innerHTML = '';
-  [...people].slice(-3).forEach(p => { const a = document.createElement('span'); a.className='av'; a.style.background = colorOf(p); a.textContent = ini(p); a.title = p; s.appendChild(a); });
+public class OsMsg {
+  public string Key = "", Name = "", C = "", Text = "", Type = "";
+  public long Time, SeenT;
+  public bool Mine;
 }
-function add(raw, live){
-  if(!raw || raw.event !== 'message') return;
-  let m; try{ m = JSON.parse(raw.message); }catch(e){ return; }
-  if(!m || typeof m.name !== 'string') return;
-  const key = m.k || raw.id;
-  if(seen.has(key)) return;
-  seen.add(key);
-  const mine = isMine(m);
-  if(!mine && !people.has(m.name)){ people.add(m.name); renderStack(); }
-  const e = thread.querySelector('.empty'); if(e) e.remove();
-  const atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80;
-  const meta = document.createElement('div'); meta.className = 'meta';
-  meta.textContent = (mine ? '' : m.name + DOT) + fmt(raw.time);
-  let el;
-  if(CHIP[m.type]){
-    el = document.createElement('div'); el.className = 'sig';
-    const c = document.createElement('div'); c.className = 'chip ' + m.type;
-    c.textContent = (mine ? 'You sent: ' : '') + CHIP[m.type] + (m.text ? DOT + m.text : '');
-    el.append(c, meta);
-  } else {
-    el = document.createElement('div'); el.className = 'row ' + (mine ? 'me' : 'them');
-    const b = document.createElement('div'); b.className = 'bub'; b.textContent = m.text || '';
-    el.append(b, meta);
+
+public static class OsNative {
+  [DllImport("user32.dll")] public static extern bool ReleaseCapture();
+  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string l);
+  public static void Drag(Form f) { ReleaseCapture(); SendMessage(f.Handle, 0xA1, (IntPtr)2, IntPtr.Zero); }
+}
+
+public static class OsUi {
+  public static Color Bg = Color.FromArgb(22, 24, 28);
+  public static Color Box = Color.FromArgb(32, 35, 39);
+  public static Color Bubble = Color.FromArgb(47, 51, 54);
+  public static Color Line = Color.FromArgb(47, 51, 54);
+  public static Color Ink = Color.FromArgb(231, 233, 234);
+  public static Color Mute = Color.FromArgb(113, 118, 123);
+  public static Color Blue = Color.FromArgb(29, 155, 240);
+  public static Color Red = Color.FromArgb(244, 33, 46);
+  public static Color Yellow = Color.FromArgb(255, 212, 0);
+  public static Color Green = Color.FromArgb(0, 186, 124);
+  public static Color DarkText = Color.FromArgb(15, 20, 25);
+  public static Color[] Avatars = { Color.FromArgb(120, 86, 255), Color.FromArgb(0, 186, 124), Color.FromArgb(249, 24, 128), Color.FromArgb(255, 122, 0), Color.FromArgb(29, 155, 240), Color.FromArgb(212, 165, 0) };
+
+  public static GraphicsPath Round(RectangleF r, float rad) {
+    GraphicsPath p = new GraphicsPath();
+    float d = rad * 2;
+    if (d > r.Height) d = r.Height;
+    if (d > r.Width) d = r.Width;
+    if (d < 1) { p.AddRectangle(r); return p; }
+    p.AddArc(r.X, r.Y, d, d, 180, 90);
+    p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+    p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+    p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+    p.CloseFigure();
+    return p;
   }
-  thread.appendChild(el);
-  if(!live || atBottom || mine) thread.scrollTop = thread.scrollHeight;
-  if(live && !mine && Date.now()/1000 - raw.time < 600){
-    if(CHIP[m.type] && !DESKTOP) flash(m.type, 'From ' + m.name + (m.text ? ': ' + m.text : ''));
+  public static bool IsSignal(string k) { return k == "red" || k == "yellow" || k == "green"; }
+  public static Color KindColor(string k) { if (k == "red") return Red; if (k == "yellow") return Yellow; return Green; }
+  public static Color KindDark(string k) { if (k == "red") return Color.FromArgb(122, 0, 0); if (k == "yellow") return Color.FromArgb(122, 96, 0); return Color.FromArgb(0, 84, 56); }
+  public static Color KindText(string k) { return k == "yellow" ? DarkText : Color.White; }
+  public static string KindLabel(string k) { if (k == "red") return "Emergency"; if (k == "yellow") return "Come please"; return "Call off - break"; }
+  public static Color AvatarColor(string s) {
+    int h = 0;
+    foreach (char ch in s) { h = unchecked(h * 31 + ch); }
+    return Avatars[(int)((uint)h % (uint)Avatars.Length)];
+  }
+  public static string Initial(string s) { s = (s ?? "").Trim(); return s.Length > 0 ? s.Substring(0, 1).ToUpper() : "?"; }
+  public static Color Mix(Color a, Color b, float t) {
+    return Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
+  }
+  public static Bitmap MakeBitmap(int size) {
+    Bitmap bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+    using (Graphics g = Graphics.FromImage(bmp)) {
+      g.SmoothingMode = SmoothingMode.AntiAlias;
+      g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+      g.Clear(Color.Transparent);
+      using (GraphicsPath p = Round(new RectangleF(0, 0, size - 1, size - 1), size * 0.2f))
+      using (SolidBrush b = new SolidBrush(Color.FromArgb(51, 6, 10))) { g.FillPath(b, p); }
+      using (Font f = new Font("Segoe UI Semibold", Math.Max(6f, size * 0.42f), FontStyle.Regular, GraphicsUnit.Pixel))
+      using (SolidBrush tb = new SolidBrush(Color.FromArgb(255, 92, 92)))
+      using (StringFormat sf = new StringFormat()) {
+        sf.Alignment = StringAlignment.Center; sf.LineAlignment = StringAlignment.Center;
+        g.DrawString("Os", f, tb, new RectangleF(0, size * 0.02f, size, size), sf);
+      }
+    }
+    return bmp;
+  }
+  public static Icon MakeIcon(int size) { Bitmap b = MakeBitmap(size); return Icon.FromHandle(b.GetHicon()); }
+  public static string Clock(long unix) {
+    DateTime d = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(unix).ToLocalTime();
+    if (d.Date == DateTime.Now.Date) return d.ToString("HH:mm");
+    return d.ToString("ddd HH:mm");
+  }
+  public static long Now() { return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds; }
+}
+
+public class RoundBtn : Control {
+  public Color Fill, Fore;
+  bool hover;
+  public RoundBtn(string text, Color fill, Color fore) {
+    SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
+    Text = text; Fill = fill; Fore = fore; Cursor = Cursors.Hand;
+    Font = new Font("Segoe UI Semibold", 10.5f);
+    BackColor = OsUi.Bg;
+  }
+  protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+  protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+  protected override void OnPaint(PaintEventArgs e) {
+    Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+    g.Clear(Parent != null ? Parent.BackColor : OsUi.Bg);
+    Color c = hover ? OsUi.Mix(Fill, Color.White, 0.12f) : Fill;
+    using (GraphicsPath p = OsUi.Round(new RectangleF(0, 0, Width - 1, Height - 1), Height / 2f))
+    using (SolidBrush b = new SolidBrush(c)) { g.FillPath(b, p); }
+    TextRenderer.DrawText(g, Text, Font, new Rectangle(0, 0, Width, Height), Fore, Fill, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
   }
 }
-function clearUnread(){ unread = 0; $('badge').style.display = 'none'; }
-document.addEventListener('visibilitychange', () => { if(!document.hidden && $('pill').style.display !== 'flex') clearUnread(); });
 
-let ovTimer = null;
-function flash(type, line){
-  const ov = $('ov'); ov.className = type; ov.style.display = 'flex';
-  $('ovt').textContent = LABEL[type]; $('ovm').textContent = line;
-  clearTimeout(ovTimer); ovTimer = setTimeout(() => { ov.style.display='none'; }, 2000);
+public class IconBtn : Control {
+  public string Kind;
+  public bool Outline;
+  bool hover;
+  public IconBtn(string kind) {
+    SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+    Kind = kind; Cursor = Cursors.Hand; BackColor = OsUi.Bg;
+  }
+  protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+  protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+  protected override void OnPaint(PaintEventArgs e) {
+    Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+    g.Clear(BackColor);
+    RectangleF r = new RectangleF(0.5f, 0.5f, Width - 2, Height - 2);
+    if (hover) { using (GraphicsPath p = OsUi.Round(r, Kind == "send" ? Height / 2f : 8)) using (SolidBrush b = new SolidBrush(Kind == "send" ? Color.FromArgb(30, 29, 155, 240) : Color.FromArgb(42, 46, 51))) g.FillPath(b, p); }
+    if (Outline) { using (GraphicsPath p = OsUi.Round(r, 8)) using (Pen pn = new Pen(OsUi.Blue, 1)) g.DrawPath(pn, p); }
+    float cx = Width / 2f, cy = Height / 2f;
+    Color col = Kind == "send" ? OsUi.Blue : OsUi.Ink;
+    using (Pen pen = new Pen(col, 1.8f)) {
+      pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round; pen.LineJoin = LineJoin.Round;
+      if (Kind == "close") {
+        g.DrawLine(pen, cx - 7, cy - 7, cx + 7, cy + 7);
+        g.DrawLine(pen, cx + 7, cy - 7, cx - 7, cy + 7);
+      } else if (Kind == "expand") {
+        g.DrawLines(pen, new PointF[] { new PointF(cx + 1, cy - 7), new PointF(cx + 7, cy - 7), new PointF(cx + 7, cy - 1) });
+        g.DrawLines(pen, new PointF[] { new PointF(cx - 1, cy + 7), new PointF(cx - 7, cy + 7), new PointF(cx - 7, cy + 1) });
+      } else if (Kind == "min") {
+        g.DrawLine(pen, cx - 7, cy + 1, cx + 7, cy + 1);
+      } else {
+        g.DrawPolygon(pen, new PointF[] { new PointF(cx - 8, cy), new PointF(cx + 8, cy - 7), new PointF(cx + 1, cy + 8), new PointF(cx - 1.5f, cy + 1.5f) });
+      }
+    }
+  }
 }
-$('ov').addEventListener('click', () => { $('ov').style.display='none'; });
-let toastT = null;
-function toast(s){ const t = $('toast'); t.textContent = s; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(()=>{ t.style.display='none'; }, 1800); }
 
-function sizeWin(w, h){ try{ window.resizeTo(w, h); window.moveTo(screen.availLeft + screen.availWidth - w - 16, screen.availTop + screen.availHeight - h - 16); }catch(e){} }
-let wide = false;
-$('expand').addEventListener('click', () => { wide = !wide; document.body.classList.toggle('wide', wide); sizeWin(wide ? 760 : 440, wide ? 820 : 680); });
-$('close').addEventListener('click', () => { if(DESKTOP){ try{ window.close(); }catch(e){} } else { $('panel').style.display='none'; $('pill').style.display='flex'; } });
-$('pillBtn').addEventListener('click', () => { $('pill').classList.remove('alert'); $('pill').style.display='none'; $('panel').style.display='flex'; clearUnread(); sizeWin(wide ? 760 : 440, wide ? 820 : 680); thread.scrollTop = thread.scrollHeight; txt.focus(); });
+public class ChatView : Control {
+  public List<OsMsg> Items = new List<OsMsg>();
+  public long SeenUpTo;
+  public bool Loaded;
+  int scroll;
+  Font fBody = new Font("Segoe UI", 10.5f);
+  Font fMeta = new Font("Segoe UI", 8.25f);
+  Font fChip = new Font("Segoe UI Semibold", 9.5f);
+  const TextFormatFlags WrapFlags = TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPadding;
 
-const lastIds = {}, live = {};
-function timeout(ms){ const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; }
-async function loadHistory(){
-  const all = [];
-  await Promise.all(SERVERS.map(async s => {
-    try{
-      const r = await fetch(s + '/json?poll=1&since=12h', {signal: timeout(8000)});
-      (await r.text()).split('\n').forEach(l => { if(l.trim()){ try{ const j = JSON.parse(l); all.push(j); lastIds[s] = j.id; }catch(e){} } });
-    }catch(e){}
-  }));
-  all.sort((a,b) => a.time - b.time).forEach(j => add(j, false));
-  if(!thread.children.length){ thread.innerHTML = '<div class="empty">No messages yet.<br>Say hello below.</div>'; }
+  public ChatView() {
+    SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+    BackColor = OsUi.Bg;
+  }
+  int MaxBubble() { return Math.Max(120, (int)(Width * 0.78)); }
+  string ChipText(OsMsg m) { return (m.Mine ? "You sent: " : "") + OsUi.KindLabel(m.Type) + (m.Text != "" ? " - " + m.Text : ""); }
+  Size BubbleSize(OsMsg m) {
+    Size s = TextRenderer.MeasureText(m.Text == "" ? " " : m.Text, fBody, new Size(MaxBubble() - 28, int.MaxValue), WrapFlags);
+    return new Size(Math.Min(MaxBubble(), s.Width + 28), s.Height + 18);
+  }
+  int ItemHeight(OsMsg m) {
+    if (OsUi.IsSignal(m.Type)) return 30 + 4 + 16 + 12;
+    return BubbleSize(m).Height + 4 + 16 + 8;
+  }
+  int ContentHeight() { int h = 14; foreach (OsMsg m in Items) h += ItemHeight(m); return h + 6; }
+  int MaxScroll() { return Math.Max(0, ContentHeight() - Height); }
+  public void ScrollToEnd() { scroll = MaxScroll(); Invalidate(); }
+  public void Add(OsMsg m) {
+    bool atBottom = scroll >= MaxScroll() - 40;
+    Items.Add(m);
+    if (atBottom || m.Mine) scroll = MaxScroll();
+    Invalidate();
+  }
+  public void UpdateTime(string key, long t) {
+    foreach (OsMsg m in Items) { if (m.Key == key) { m.Time = t; Invalidate(); return; } }
+  }
+  protected override void OnResize(EventArgs e) { base.OnResize(e); scroll = Math.Min(scroll, MaxScroll()); }
+  protected override void OnMouseWheel(MouseEventArgs e) {
+    scroll -= e.Delta / 120 * 60;
+    if (scroll < 0) scroll = 0;
+    int mx = MaxScroll(); if (scroll > mx) scroll = mx;
+    Invalidate();
+  }
+  protected override void OnPaint(PaintEventArgs e) {
+    Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+    g.Clear(BackColor);
+    if (Items.Count == 0) {
+      TextRenderer.DrawText(g, Loaded ? "No messages yet.\nSay hello below." : "Loading...", fBody, new Rectangle(0, 0, Width, Height), OsUi.Mute, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+      return;
+    }
+    int lastSeenMine = -1;
+    for (int i = 0; i < Items.Count; i++) { if (Items[i].Mine && !OsUi.IsSignal(Items[i].Type) && SeenUpTo > 0 && Items[i].Time <= SeenUpTo) lastSeenMine = i; }
+    int y = 14 - scroll;
+    for (int i = 0; i < Items.Count; i++) {
+      OsMsg m = Items[i];
+      int h = ItemHeight(m);
+      if (y + h < 0 || y > Height) { y += h; continue; }
+      string meta = (m.Mine ? "" : m.Name + " - ") + OsUi.Clock(m.Time);
+      if (OsUi.IsSignal(m.Type)) {
+        string t = ChipText(m);
+        Size ts = TextRenderer.MeasureText(t, fChip);
+        int w = Math.Min(Width - 40, ts.Width + 32);
+        Rectangle r = new Rectangle((Width - w) / 2, y, w, 30);
+        using (GraphicsPath p = OsUi.Round(r, 15)) using (SolidBrush b = new SolidBrush(OsUi.KindColor(m.Type))) g.FillPath(b, p);
+        TextRenderer.DrawText(g, t, fChip, r, OsUi.KindText(m.Type), OsUi.KindColor(m.Type), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        TextRenderer.DrawText(g, meta, fMeta, new Rectangle(0, y + 34, Width, 16), OsUi.Mute, TextFormatFlags.HorizontalCenter);
+      } else {
+        Size bs = BubbleSize(m);
+        int x = m.Mine ? Width - 14 - bs.Width : 14;
+        Rectangle r = new Rectangle(x, y, bs.Width, bs.Height);
+        Color fill = m.Mine ? OsUi.Blue : OsUi.Bubble;
+        using (GraphicsPath p = OsUi.Round(r, Math.Min(18, bs.Height / 2f))) using (SolidBrush b = new SolidBrush(fill)) g.FillPath(b, p);
+        TextRenderer.DrawText(g, m.Text, fBody, new Rectangle(x + 14, y + 9, bs.Width - 28, bs.Height - 18), m.Mine ? Color.White : OsUi.Ink, fill, WrapFlags);
+        if (i == lastSeenMine) meta += "  -  Vu";
+        TextRenderer.DrawText(g, meta, fMeta, new Rectangle(m.Mine ? 0 : x + 6, y + bs.Height + 4, m.Mine ? Width - 20 : Width, 16), i == lastSeenMine ? OsUi.Blue : OsUi.Mute, m.Mine ? TextFormatFlags.Right : TextFormatFlags.Left);
+      }
+      y += h;
+    }
+    int ch = ContentHeight();
+    if (ch > Height) {
+      int th = Math.Max(30, Height * Height / ch);
+      int ty = (int)((Height - th) * (scroll / (float)Math.Max(1, ch - Height)));
+      using (GraphicsPath p = OsUi.Round(new Rectangle(Width - 7, ty + 2, 4, th - 4), 2)) using (SolidBrush b = new SolidBrush(OsUi.Line)) g.FillPath(b, p);
+    }
+  }
 }
-function setConn(){
-  const n = Object.values(live).filter(Boolean).length;
-  $('conn').textContent = n ? (people.size ? [...people].slice(-1)[0] + DOT + 'connected' : 'Connected') : 'Offline - retrying...';
-  $('dot').className = 'dot' + (n ? ' on' : '');
+
+public class ConfirmForm : Form {
+  public ConfirmForm() {
+    FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.CenterParent; ShowInTaskbar = false;
+    BackColor = Color.Black; Size = new Size(320, 190); TopMost = true;
+    Region = new Region(OsUi.Round(new RectangleF(0, 0, 320, 190), 16));
+    Label t = new Label(); t.Text = "Send emergency?"; t.ForeColor = OsUi.Ink; t.Font = new Font("Segoe UI Semibold", 13f); t.AutoSize = false; t.TextAlign = ContentAlignment.MiddleCenter; t.Bounds = new Rectangle(0, 18, 320, 30);
+    Label s = new Label(); s.Text = "Your colleague's Messages bar will blink red."; s.ForeColor = OsUi.Mute; s.Font = new Font("Segoe UI", 9.5f); s.AutoSize = false; s.TextAlign = ContentAlignment.MiddleCenter; s.Bounds = new Rectangle(10, 50, 300, 22);
+    RoundBtn yes = new RoundBtn("Send emergency", OsUi.Red, Color.White); yes.BackColor = Color.Black; yes.Bounds = new Rectangle(24, 84, 272, 40);
+    RoundBtn no = new RoundBtn("Cancel", Color.FromArgb(32, 35, 39), OsUi.Ink); no.BackColor = Color.Black; no.Bounds = new Rectangle(24, 132, 272, 40);
+    yes.Click += delegate { DialogResult = DialogResult.Yes; Close(); };
+    no.Click += delegate { DialogResult = DialogResult.No; Close(); };
+    Controls.Add(t); Controls.Add(s); Controls.Add(yes); Controls.Add(no);
+    KeyPreview = true;
+    KeyDown += delegate(object o, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.No; Close(); } };
+  }
 }
-function connect(s){
-  const es = new EventSource(s + '/sse?since=' + (lastIds[s] || 'now'));
-  es.onopen = () => { live[s] = true; setConn(); };
-  es.onmessage = e => { try{ const j = JSON.parse(e.data); if(j.id) lastIds[s] = j.id; add(j, true); setConn(); }catch(err){} };
-  es.onerror = () => { live[s] = false; setConn(); es.close(); setTimeout(() => connect(s), 4000); };
+
+public class Header : Control {
+  ChatForm form;
+  public IconBtn Expand, Close, Min;
+  Font fTitle = new Font("Segoe UI Semibold", 14f);
+  Font fSub = new Font("Segoe UI", 9f);
+  public Header(ChatForm f) {
+    SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+    form = f; BackColor = OsUi.Bg;
+    Min = new IconBtn("min"); Expand = new IconBtn("expand"); Expand.Outline = true; Close = new IconBtn("close");
+    Controls.Add(Min); Controls.Add(Expand); Controls.Add(Close);
+  }
+  protected override void OnResize(EventArgs e) {
+    base.OnResize(e);
+    Close.Bounds = new Rectangle(Width - 50, 16, 38, 38);
+    Expand.Bounds = new Rectangle(Width - 94, 16, 38, 38);
+    Min.Bounds = new Rectangle(Width - 138, 16, 38, 38);
+  }
+  protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if (e.Button == MouseButtons.Left) OsNative.Drag(form); }
+  protected override void OnPaint(PaintEventArgs e) {
+    Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+    g.Clear(BackColor);
+    TextRenderer.DrawText(g, "Messages", fTitle, new Point(16, 10), OsUi.Ink);
+    bool on = form.App.AnyConnected();
+    using (SolidBrush b = new SolidBrush(on ? OsUi.Green : OsUi.Mute)) g.FillEllipse(b, 19, 45, 8, 8);
+    TextRenderer.DrawText(g, form.App.StatusText(), fSub, new Point(32, 41), OsUi.Mute);
+    using (Pen p = new Pen(OsUi.Line)) g.DrawLine(p, 0, Height - 1, Width, Height - 1);
+  }
 }
-function post(o){
-  o.name = name; o.c = cid; o.k = cid + '-' + Date.now() + '-' + Math.random().toString(36).slice(2,7);
-  const body = JSON.stringify(o);
-  return Promise.any(SERVERS.map(s => fetch(s, {method:'POST', body, signal: timeout(8000)}).then(r => { if(!r.ok) throw new Error(r.status); })));
+
+public class ChatForm : Form {
+  public OsApp App;
+  public ChatView View;
+  public Header Head;
+  Panel sig, bottom;
+  RoundBtn bRed, bYel, bGrn;
+  TextBox input;
+  IconBtn sendBtn;
+  public bool Quitting;
+  bool wide;
+
+  public ChatForm(OsApp app) {
+    App = app;
+    Text = "Messages"; Icon = app.AppIcon;
+    FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual;
+    BackColor = OsUi.Line; ShowInTaskbar = true; KeyPreview = true;
+    Size = new Size(440, 680);
+    Place();
+    Head = new Header(this);
+    sig = new Panel(); sig.BackColor = OsUi.Bg;
+    sig.Paint += delegate(object o, PaintEventArgs e) { using (Pen p = new Pen(OsUi.Line)) e.Graphics.DrawLine(p, 0, sig.Height - 1, sig.Width, sig.Height - 1); };
+    bRed = new RoundBtn("Emergency", OsUi.Red, Color.White);
+    bYel = new RoundBtn("Come", OsUi.Yellow, OsUi.DarkText);
+    bGrn = new RoundBtn("Call off", OsUi.Green, Color.White);
+    sig.Controls.Add(bRed); sig.Controls.Add(bYel); sig.Controls.Add(bGrn);
+    sig.Resize += delegate { LayoutSignals(); };
+    View = new ChatView();
+    bottom = new Panel(); bottom.BackColor = OsUi.Bg;
+    bottom.Paint += delegate(object o, PaintEventArgs e) {
+      Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+      using (Pen p = new Pen(OsUi.Line)) g.DrawLine(p, 0, 0, bottom.Width, 0);
+      using (GraphicsPath gp = OsUi.Round(new RectangleF(12, 12, bottom.Width - 24, 48), 16)) using (SolidBrush b = new SolidBrush(OsUi.Box)) g.FillPath(b, gp);
+    };
+    input = new TextBox(); input.BorderStyle = BorderStyle.None; input.BackColor = OsUi.Box; input.ForeColor = OsUi.Ink; input.Font = new Font("Segoe UI", 11f);
+    input.MaxLength = 2000;
+    sendBtn = new IconBtn("send"); sendBtn.BackColor = OsUi.Box;
+    bottom.Controls.Add(input); bottom.Controls.Add(sendBtn);
+    bottom.Resize += delegate { LayoutBottom(); };
+    Controls.Add(Head); Controls.Add(sig); Controls.Add(View); Controls.Add(bottom);
+
+    Head.Close.Click += delegate { Hide(); };
+    Head.Min.Click += delegate { WindowState = FormWindowState.Minimized; };
+    Head.Expand.Click += delegate { wide = !wide; Size = wide ? new Size(760, 820) : new Size(440, 680); Place(); };
+    sendBtn.Click += delegate { SendInput(); };
+    input.KeyDown += delegate(object o, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; SendInput(); } };
+    bRed.Click += delegate { Signal("red"); };
+    bYel.Click += delegate { Signal("yellow"); };
+    bGrn.Click += delegate { Signal("green"); };
+    KeyDown += delegate(object o, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) Hide(); };
+    DoLayout(); LayoutSignals(); LayoutBottom();
+  }
+  protected override CreateParams CreateParams {
+    get { CreateParams cp = base.CreateParams; cp.ClassStyle |= 0x20000; cp.Style |= 0x20000; return cp; }
+  }
+  protected override void OnHandleCreated(EventArgs e) {
+    base.OnHandleCreated(e);
+    try { OsNative.SendMessage(input.Handle, 0x1501, (IntPtr)1, "Start a new message"); } catch { }
+  }
+  protected override void OnFormClosing(FormClosingEventArgs e) {
+    if (!Quitting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); return; }
+    base.OnFormClosing(e);
+  }
+  protected override void OnResize(EventArgs e) {
+    base.OnResize(e);
+    DoLayout();
+  }
+  void DoLayout() {
+    if (WindowState == FormWindowState.Minimized || Width < 50) return;
+    Region = new Region(OsUi.Round(new RectangleF(0, 0, Width, Height), 14));
+    int w = Width - 2, h = Height - 2;
+    if (Head == null || sig == null || View == null || bottom == null) return;
+    Head.Bounds = new Rectangle(1, 1, w, 70);
+    sig.Bounds = new Rectangle(1, 71, w, 68);
+    bottom.Bounds = new Rectangle(1, h + 1 - 72, w, 72);
+    View.Bounds = new Rectangle(1, 139, w, h - 138 - 72);
+  }
+  void LayoutSignals() {
+    int gap = 8, pad = 12, bw = (sig.Width - pad * 2 - gap * 2) / 3;
+    bRed.Bounds = new Rectangle(pad, 12, bw, 44);
+    bYel.Bounds = new Rectangle(pad + bw + gap, 12, bw, 44);
+    bGrn.Bounds = new Rectangle(pad + (bw + gap) * 2, 12, bw, 44);
+  }
+  void LayoutBottom() {
+    int boxW = bottom.Width - 24;
+    input.Bounds = new Rectangle(28, 12 + (48 - input.PreferredHeight) / 2, boxW - 16 - 44, input.PreferredHeight);
+    sendBtn.Bounds = new Rectangle(12 + boxW - 44, 18, 36, 36);
+  }
+  public void Place() {
+    Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+    Location = new Point(wa.Right - Width - 16, wa.Bottom - Height - 16);
+  }
+  public void FocusInput() { try { input.Focus(); } catch { } }
+  void SendInput() {
+    string t = input.Text.Trim();
+    if (t == "") return;
+    input.Text = "";
+    App.Send(t, null);
+  }
+  void Signal(string kind) {
+    if (kind == "red") {
+      using (ConfirmForm c = new ConfirmForm()) { if (c.ShowDialog(this) != DialogResult.Yes) return; }
+    }
+    string note = input.Text.Trim(); input.Text = "";
+    App.Send(note, kind);
+  }
 }
-function grow(){ txt.style.height = '24px'; txt.style.height = Math.min(txt.scrollHeight, 110) + 'px'; }
-txt.addEventListener('input', grow);
-async function send(){
-  const text = txt.value.trim(); if(!text) return;
-  txt.value = ''; grow();
-  try{ await post({text}); st.textContent=''; }catch(e){ st.textContent = 'Not sent - check the internet and try again.'; txt.value = text; grow(); }
+
+public class PillForm : Form {
+  OsApp app;
+  Font fBig = new Font("Segoe UI Semibold", 13.5f);
+  Font fMid = new Font("Segoe UI Semibold", 11f);
+  Font fSmall = new Font("Segoe UI Semibold", 8.5f);
+  public PillForm(OsApp a) {
+    app = a;
+    SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+    FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; StartPosition = FormStartPosition.Manual;
+    BackColor = Color.Black; Cursor = Cursors.Hand; Text = "Office Signal bar";
+    int w = 320, h = 62;
+    Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+    Bounds = new Rectangle(wa.Right - w - 16, wa.Bottom - h - 16, w, h);
+    using (GraphicsPath p = new GraphicsPath()) {
+      p.AddArc(0, 0, h, h, 90, 180); p.AddArc(w - h, 0, h, h, 270, 180); p.CloseFigure();
+      Region = new Region(p);
+    }
+  }
+  protected override bool ShowWithoutActivation { get { return true; } }
+  protected override CreateParams CreateParams {
+    get { CreateParams cp = base.CreateParams; cp.ExStyle |= 0x00000080 | 0x00000008; return cp; }
+  }
+  protected override void OnClick(EventArgs e) { base.OnClick(e); app.ShowChat(); }
+  protected override void OnPaint(PaintEventArgs e) {
+    Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+    int w = Width, h = Height;
+    string k = app.Alert;
+    Color bg = k != null ? (app.BlinkOn ? OsUi.KindDark(k) : OsUi.KindColor(k)) : OsUi.Box;
+    g.Clear(bg);
+    using (GraphicsPath p = new GraphicsPath()) {
+      p.AddArc(0, 0, h - 1, h - 1, 90, 180); p.AddArc(w - h, 0, h - 1, h - 1, 270, 180); p.CloseFigure();
+      using (Pen pn = new Pen(OsUi.Line, 1.5f)) g.DrawPath(pn, p);
+    }
+    Color fg = (k == "yellow" && !app.BlinkOn) ? OsUi.DarkText : OsUi.Ink;
+    float cy = h / 2f;
+    using (Pen pen = new Pen(fg, 2f)) {
+      pen.LineJoin = LineJoin.Round;
+      g.DrawPolygon(pen, new PointF[] { new PointF(24, cy - 1), new PointF(42, cy - 9), new PointF(34, cy + 9), new PointF(31.5f, cy + 1.5f) });
+    }
+    string title = k != null ? OsUi.KindLabel(k) + (app.AlertFrom != "" ? " - " + app.AlertFrom : "") : "Messages";
+    TextRenderer.DrawText(g, title, k != null ? fMid : fBig, new Rectangle(56, 0, w - 56 - 64, h), fg, bg, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+    int ax = w - 52, ay = (h - 34) / 2;
+    if (app.Other != "") {
+      using (SolidBrush b = new SolidBrush(OsUi.AvatarColor(app.Other))) g.FillEllipse(b, ax, ay, 34, 34);
+      using (Pen pn = new Pen(bg, 2f)) g.DrawEllipse(pn, ax, ay, 34, 34);
+      TextRenderer.DrawText(g, OsUi.Initial(app.Other), fMid, new Rectangle(ax, ay, 34, 34), Color.White, OsUi.AvatarColor(app.Other), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+    }
+    if (app.Unread > 0 && k == null) {
+      int bx = ax - 30, by = (h - 22) / 2;
+      using (SolidBrush b = new SolidBrush(OsUi.Blue)) g.FillEllipse(b, bx, by, 22, 22);
+      string n = app.Unread > 9 ? "9+" : app.Unread.ToString();
+      TextRenderer.DrawText(g, n, fSmall, new Rectangle(bx, by, 22, 22), Color.White, OsUi.Blue, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+    }
+  }
 }
-$('f').addEventListener('submit', e => { e.preventDefault(); send(); });
-txt.addEventListener('keydown', e => { if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
-async function fire(c){
-  const note = txt.value.trim(); txt.value = ''; grow();
-  try{ await post({type:c, text:note}); toast('Sent: ' + CHIP[c]); }
-  catch(e){ st.textContent = 'SIGNAL NOT SENT - check the internet!'; txt.value = note; grow(); }
+
+public class OsApp : ApplicationContext {
+  public string Name, Cid, Topic;
+  string[] servers = { "https://ntfy.sh", "https://ntfy.envs.net" };
+  public ChatForm Chat;
+  public PillForm Pill;
+  public Icon AppIcon;
+  NotifyIcon tray;
+  System.Windows.Forms.Timer watch, blink;
+  HashSet<string> seenKeys = new HashSet<string>();
+  Dictionary<string, bool> conn = new Dictionary<string, bool>();
+  public string Alert;
+  public string AlertFrom = "";
+  public bool BlinkOn;
+  public int Unread;
+  public string Other = "";
+  long lastOtherTime, seenSent;
+  volatile bool running = true;
+  EventWaitHandle showEvent;
+  Random rnd = new Random();
+
+  public OsApp(string name, string cid, string topic) {
+    Name = name; Cid = cid; Topic = topic;
+    AppIcon = OsUi.MakeIcon(64);
+    Chat = new ChatForm(this);
+    IntPtr h1 = Chat.Handle;
+    Pill = new PillForm(this);
+    IntPtr h2 = Pill.Handle;
+    tray = new NotifyIcon();
+    tray.Icon = OsUi.MakeIcon(32); tray.Text = "Office Signal"; tray.Visible = true;
+    ContextMenuStrip menu = new ContextMenuStrip();
+    menu.Items.Add("Open Messages", null, delegate { ShowChat(); });
+    menu.Items.Add("Quit", null, delegate { Shutdown(); });
+    tray.ContextMenuStrip = menu;
+    tray.DoubleClick += delegate { ShowChat(); };
+    watch = new System.Windows.Forms.Timer(); watch.Interval = 500; watch.Tick += delegate { Watch(); }; watch.Start();
+    blink = new System.Windows.Forms.Timer(); blink.Interval = 450;
+    blink.Tick += delegate { BlinkOn = !BlinkOn; Pill.TopMost = true; Pill.Invalidate(); };
+    bool createdNew;
+    showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\OfficeSignalShow", out createdNew);
+    Thread waiter = new Thread(delegate() {
+      while (running) { try { if (showEvent.WaitOne(1000)) Ui(delegate { ShowChat(); }); } catch { Thread.Sleep(1000); } }
+    });
+    waiter.IsBackground = true; waiter.Start();
+    Thread loader = new Thread(LoadAndListen); loader.IsBackground = true; loader.Start();
+    ShowChat();
+  }
+
+  public void Ui(MethodInvoker a) {
+    try { if (Chat != null && Chat.IsHandleCreated && !Chat.IsDisposed) Chat.BeginInvoke(a); } catch { }
+  }
+  public bool AnyConnected() { lock (conn) { foreach (bool b in conn.Values) if (b) return true; } return false; }
+  public string StatusText() {
+    if (!AnyConnected()) return "Offline - retrying...";
+    return Other != "" ? Other + " - connected" : "Connected";
+  }
+  void SetConn(string s, bool on) {
+    bool changed;
+    lock (conn) { bool old; changed = !conn.TryGetValue(s, out old) || old != on; conn[s] = on; }
+    if (changed) Ui(delegate { Chat.Head.Invalidate(); });
+  }
+  public bool ChatActive() {
+    return Chat.Visible && Chat.WindowState != FormWindowState.Minimized && Form.ActiveForm == Chat;
+  }
+  public void ShowChat() {
+    ClearAlert();
+    Unread = 0;
+    if (!Chat.Visible) Chat.Show();
+    if (Chat.WindowState == FormWindowState.Minimized) Chat.WindowState = FormWindowState.Normal;
+    Chat.Activate(); Chat.BringToFront();
+    Chat.FocusInput();
+    Pill.Invalidate();
+    Watch();
+  }
+  void ClearAlert() { Alert = null; AlertFrom = ""; blink.Stop(); Pill.Invalidate(); }
+  void StartAlert(string kind, string from) {
+    Alert = kind; AlertFrom = from; BlinkOn = false;
+    if (!Pill.Visible) Pill.Show();
+    Pill.TopMost = true; Pill.Invalidate();
+    blink.Start();
+  }
+  void Watch() {
+    bool shown = Chat.Visible && Chat.WindowState != FormWindowState.Minimized;
+    bool wantPill = Alert != null || !shown;
+    if (wantPill && !Pill.Visible) { Pill.Show(); Pill.TopMost = true; }
+    else if (!wantPill && Pill.Visible) Pill.Hide();
+    if (ChatActive()) {
+      if (Unread != 0) { Unread = 0; Pill.Invalidate(); }
+      if (lastOtherTime > seenSent) { seenSent = lastOtherTime; Send("", "seen"); }
+    }
+  }
+  public void Shutdown() {
+    running = false;
+    try { tray.Visible = false; tray.Dispose(); } catch { }
+    try { Pill.Close(); } catch { }
+    try { Chat.Quitting = true; Chat.Close(); } catch { }
+    ExitThread();
+  }
+
+  static string S(Dictionary<string, object> d, string k) {
+    object o;
+    if (d != null && d.TryGetValue(k, out o) && o != null) return Convert.ToString(o, CultureInfo.InvariantCulture);
+    return "";
+  }
+  static long L(Dictionary<string, object> d, string k) {
+    object o;
+    if (d != null && d.TryGetValue(k, out o) && o != null) { try { return Convert.ToInt64(o, CultureInfo.InvariantCulture); } catch { } }
+    return 0;
+  }
+  OsMsg Parse(string line, out string id) {
+    id = null;
+    try {
+      JavaScriptSerializer js = new JavaScriptSerializer();
+      Dictionary<string, object> ev = js.DeserializeObject(line) as Dictionary<string, object>;
+      if (ev == null || S(ev, "event") != "message") return null;
+      id = S(ev, "id");
+      Dictionary<string, object> inner = js.DeserializeObject(S(ev, "message")) as Dictionary<string, object>;
+      if (inner == null) return null;
+      OsMsg m = new OsMsg();
+      m.Name = S(inner, "name").Trim(); if (m.Name == "") return null;
+      m.C = S(inner, "c"); m.Text = S(inner, "text"); m.Type = S(inner, "type");
+      m.Key = S(inner, "k"); if (m.Key == "") m.Key = id;
+      m.Time = L(ev, "time"); m.SeenT = L(inner, "t");
+      m.Mine = m.C != "" ? m.C == Cid : m.Name == Name;
+      return m;
+    } catch { return null; }
+  }
+
+  void LoadAndListen() {
+    List<OsMsg> all = new List<OsMsg>();
+    Dictionary<string, string> lastIds = new Dictionary<string, string>();
+    foreach (string s in servers) {
+      try {
+        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(s + "/" + Topic + "/json?poll=1&since=12h");
+        req.Timeout = 8000; req.ReadWriteTimeout = 8000;
+        using (WebResponse resp = req.GetResponse())
+        using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8)) {
+          string line;
+          while ((line = sr.ReadLine()) != null) {
+            string id; OsMsg m = Parse(line, out id);
+            if (id != null) lastIds[s] = id;
+            if (m != null) all.Add(m);
+          }
+        }
+      } catch { }
+    }
+    all.Sort(delegate(OsMsg a, OsMsg b) { return a.Time.CompareTo(b.Time); });
+    Ui(delegate {
+      foreach (OsMsg m in all) Deliver(m, false);
+      Chat.View.Loaded = true;
+      Chat.View.ScrollToEnd();
+    });
+    foreach (string s in servers) {
+      string srv = s;
+      string li = lastIds.ContainsKey(s) ? lastIds[s] : null;
+      Thread t = new Thread(delegate() { Listen(srv, li); });
+      t.IsBackground = true; t.Start();
+    }
+  }
+  void Listen(string server, string last) {
+    while (running) {
+      try {
+        string u = server + "/" + Topic + "/json" + (last != null ? "?since=" + last : "");
+        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(u);
+        req.Timeout = 30000; req.ReadWriteTimeout = 120000;
+        using (WebResponse resp = req.GetResponse())
+        using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8)) {
+          SetConn(server, true);
+          string line;
+          while (running && (line = sr.ReadLine()) != null) {
+            string id; OsMsg m = Parse(line, out id);
+            if (id != null) last = id;
+            if (m != null) { OsMsg mm = m; Ui(delegate { Deliver(mm, true); }); }
+          }
+        }
+      } catch { }
+      SetConn(server, false);
+      Thread.Sleep(3000);
+    }
+  }
+
+  public void Deliver(OsMsg m, bool live) {
+    if (!seenKeys.Add(m.Key)) { if (m.Mine) Chat.View.UpdateTime(m.Key, m.Time); return; }
+    if (m.Type == "seen") {
+      if (!m.Mine && m.SeenT > Chat.View.SeenUpTo) { Chat.View.SeenUpTo = m.SeenT; Chat.View.Invalidate(); }
+      return;
+    }
+    if (!m.Mine) {
+      Other = m.Name;
+      if (m.Time > lastOtherTime) lastOtherTime = m.Time;
+      Chat.Head.Invalidate();
+    }
+    Chat.View.Add(m);
+    if (live && !m.Mine) {
+      if (OsUi.IsSignal(m.Type)) StartAlert(m.Type, m.Name);
+      else if (!ChatActive()) Unread++;
+      Pill.Invalidate();
+    }
+  }
+
+  public void Send(string text, string type) {
+    Dictionary<string, object> d = new Dictionary<string, object>();
+    string key = Cid + "-" + DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture) + "-" + rnd.Next(100000).ToString(CultureInfo.InvariantCulture);
+    d["name"] = Name; d["c"] = Cid; d["k"] = key; d["text"] = text ?? "";
+    if (type != null) d["type"] = type;
+    if (type == "seen") d["t"] = seenSent;
+    string body = new JavaScriptSerializer().Serialize(d);
+    if (type != "seen") {
+      OsMsg m = new OsMsg();
+      m.Name = Name; m.C = Cid; m.Text = text ?? ""; m.Type = type ?? ""; m.Key = key; m.Time = OsUi.Now(); m.Mine = true;
+      Deliver(m, false);
+      Chat.View.ScrollToEnd();
+    }
+    foreach (string s in servers) {
+      string url = s + "/" + Topic;
+      ThreadPool.QueueUserWorkItem(delegate {
+        try { using (WebClient wc = new WebClient()) { wc.Encoding = Encoding.UTF8; wc.UploadString(url, "POST", body); } } catch { }
+      });
+    }
+  }
 }
-document.querySelectorAll('.sigs button').forEach(b => b.addEventListener('click', () => {
-  if(b.dataset.c === 'red'){ $('dlg').style.display = 'flex'; $('yes').focus(); } else fire(b.dataset.c);
-}));
-$('no').addEventListener('click', () => { $('dlg').style.display='none'; });
-$('yes').addEventListener('click', () => { $('dlg').style.display='none'; fire('red'); });
-setConn(); loadHistory().then(() => { setConn(); SERVERS.forEach(connect); });
-}
-</script></body></html>
 '@
-$html = $html.Replace('__TOPIC__', $global:topic)
-[IO.File]::WriteAllText($global:htmlPath, $html, (New-Object Text.UTF8Encoding $false))
+try { Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms, System.Drawing, System.Web.Extensions -IgnoreWarnings -ErrorAction Stop }
+catch { $det = (@($Error) | Select-Object -First 6 | ForEach-Object { $_.ToString() }) -join "`r`n"; throw "Build failed:`r`n$det" }
 
-function Get-MsgWindow { return [OsWin]::FindWindow($null, 'Messages') }
-function Test-WindowOpen {
-  $h = Get-MsgWindow
-  return ($h -ne [IntPtr]::Zero -and [OsWin]::IsWindowVisible($h) -and -not [OsWin]::IsIconic($h))
-}
-function Open-Window {
-  $h = Get-MsgWindow
-  if ($h -ne [IntPtr]::Zero) { [void][OsWin]::ShowWindow($h, 9); [void][OsWin]::SetForegroundWindow($h); return }
-  $u = ([Uri]$global:htmlPath).AbsoluteUri + '#n=' + [Uri]::EscapeDataString($global:myName) + '&c=' + $global:myCid
-  $wa = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-  $x = $wa.Right - 440 - 16; $y = $wa.Bottom - 680 - 16
-  $a = @("--app=$u", '--window-size=440,680', "--window-position=$x,$y")
-  try { Start-Process 'msedge' -ArgumentList $a -ErrorAction Stop; return } catch {}
-  try { Start-Process 'chrome' -ArgumentList $a -ErrorAction Stop; return } catch {}
-  Start-Process $u
-}
-
-# ---- only one copy running: if already running, just open the window ----
-$created = $false
-$global:mutex = New-Object System.Threading.Mutex($true, 'Local\OfficeSignalApp', [ref]$created)
-if (-not $created) { Open-Window; return }
-
-# ---- app icon: rounded square with "Os" (Adobe style) ----
-function New-OsBitmap([int]$size) {
-  $bmp = New-Object Drawing.Bitmap($size, $size, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
-  $g = [Drawing.Graphics]::FromImage($bmp)
-  $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'AntiAliasGridFit'
-  $g.Clear([Drawing.Color]::Transparent)
-  $r = [int]($size * 0.18); $p = New-Object Drawing.Drawing2D.GraphicsPath
-  $p.AddArc(0, 0, 2 * $r, 2 * $r, 180, 90); $p.AddArc($size - 2 * $r - 1, 0, 2 * $r, 2 * $r, 270, 90)
-  $p.AddArc($size - 2 * $r - 1, $size - 2 * $r - 1, 2 * $r, 2 * $r, 0, 90); $p.AddArc(0, $size - 2 * $r - 1, 2 * $r, 2 * $r, 90, 90); $p.CloseFigure()
-  $g.FillPath((New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(51, 6, 10))), $p)
-  $fs = [Math]::Max(6, $size * 0.42)
-  $font = New-Object Drawing.Font('Segoe UI Semibold', [single]$fs, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
-  $sf = New-Object Drawing.StringFormat; $sf.Alignment = 'Center'; $sf.LineAlignment = 'Center'
-  $g.DrawString('Os', $font, (New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(255, 92, 92))), (New-Object Drawing.RectangleF(0, [single]($size * 0.02), $size, $size)), $sf)
-  $g.Dispose()
-  return $bmp
-}
+# ---- Os icon file + desktop shortcut ----
 $global:icoPath = Join-Path $global:dir 'OfficeSignal.ico'
 try {
-  $big = New-OsBitmap 256; $ms = New-Object IO.MemoryStream
+  $big = [OsUi]::MakeBitmap(256); $ms = New-Object IO.MemoryStream
   $big.Save($ms, [Drawing.Imaging.ImageFormat]::Png); $png = $ms.ToArray()
   $fsI = [IO.File]::Create($global:icoPath); $bw = New-Object IO.BinaryWriter($fsI)
   $bw.Write([UInt16]0); $bw.Write([UInt16]1); $bw.Write([UInt16]1)
@@ -311,8 +710,6 @@ try {
   $bw.Write([UInt16]1); $bw.Write([UInt16]32); $bw.Write([UInt32]$png.Length); $bw.Write([UInt32]22)
   $bw.Write($png); $bw.Close()
 } catch {}
-
-# ---- keep a copy of the launcher + a desktop shortcut with the Os icon ----
 try {
   $stable = Join-Path $global:dir 'Office Signal.bat'
   if ($global:launcher -and (Test-Path $global:launcher) -and ($global:launcher -ne $stable)) { Copy-Item -LiteralPath $global:launcher -Destination $stable -Force }
@@ -327,183 +724,11 @@ try {
   }
 } catch {}
 
-# ---- the floating pill (bottom-right): Messages bar, blinks in colour for signals ----
-$global:kindColor = @{ red = [Drawing.Color]::FromArgb(244, 33, 46); yellow = [Drawing.Color]::FromArgb(255, 212, 0); green = [Drawing.Color]::FromArgb(0, 186, 124) }
-$global:kindDark  = @{ red = [Drawing.Color]::FromArgb(122, 0, 0); yellow = [Drawing.Color]::FromArgb(122, 96, 0); green = [Drawing.Color]::FromArgb(0, 84, 56) }
-$global:kindLabel = @{ red = 'Emergency'; yellow = 'Come please'; green = 'Call off - break' }
-$global:alertKind = $null; $global:alertFrom = ''; $global:blinkOn = $false
-$global:unread = 0; $global:other = ''
-$global:pillBg = [Drawing.Color]::FromArgb(32, 35, 39)
-$global:avatarColors = @([Drawing.Color]::FromArgb(120, 86, 255), [Drawing.Color]::FromArgb(0, 186, 124), [Drawing.Color]::FromArgb(249, 24, 128), [Drawing.Color]::FromArgb(255, 122, 0), [Drawing.Color]::FromArgb(29, 155, 240), [Drawing.Color]::FromArgb(212, 165, 0))
-
-$pw = 320; $ph = 62
-$global:pill = New-Object OsPillForm
-$global:pill.FormBorderStyle = 'None'; $global:pill.ShowInTaskbar = $false; $global:pill.TopMost = $true; $global:pill.StartPosition = 'Manual'
-$global:pill.BackColor = [Drawing.Color]::Black
-$wa0 = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-$global:pill.Bounds = New-Object Drawing.Rectangle(($wa0.Right - $pw - 16), ($wa0.Bottom - $ph - 16), $pw, $ph)
-$gp = New-Object Drawing.Drawing2D.GraphicsPath
-$gp.AddArc(0, 0, $ph, $ph, 90, 180); $gp.AddArc($pw - $ph, 0, $ph, $ph, 270, 180); $gp.CloseFigure()
-$global:pill.Region = New-Object Drawing.Region($gp)
-$global:pill.Cursor = [Windows.Forms.Cursors]::Hand
-$global:pillFont = New-Object Drawing.Font('Segoe UI Semibold', [single]15, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
-$global:pillFontBig = New-Object Drawing.Font('Segoe UI Semibold', [single]18, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
-$global:smallFont = New-Object Drawing.Font('Segoe UI Semibold', [single]12, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
-
-$global:pill.Add_Paint({
-  param($s, $e)
-  $g = $e.Graphics; $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'AntiAliasGridFit'
-  $w = $s.Width; $h = $s.Height
-  $k = $global:alertKind
-  if ($k) { if ($global:blinkOn) { $bg = $global:kindDark[$k] } else { $bg = $global:kindColor[$k] } } else { $bg = $global:pillBg }
-  $g.Clear($bg)
-  $path = New-Object Drawing.Drawing2D.GraphicsPath
-  $path.AddArc(0, 0, $h - 1, $h - 1, 90, 180); $path.AddArc($w - $h, 0, $h - 1, $h - 1, 270, 180); $path.CloseFigure()
-  $g.DrawPath((New-Object Drawing.Pen([Drawing.Color]::FromArgb(47, 51, 54), 1.5)), $path)
-  if ($k -eq 'yellow' -and -not $global:blinkOn) { $fg = [Drawing.Color]::FromArgb(15, 20, 25) } else { $fg = [Drawing.Color]::FromArgb(231, 233, 234) }
-  $pen = New-Object Drawing.Pen($fg, 2); $pen.LineJoin = 'Round'
-  $cy = $h / 2
-  $pts = [Drawing.PointF[]]@(
-    (New-Object Drawing.PointF(24, ($cy - 1))), (New-Object Drawing.PointF(42, ($cy - 9))),
-    (New-Object Drawing.PointF(34, ($cy + 9))), (New-Object Drawing.PointF(31.5, ($cy + 1.5))))
-  $g.DrawPolygon($pen, $pts)
-  $brush = New-Object Drawing.SolidBrush($fg)
-  $sf = New-Object Drawing.StringFormat; $sf.LineAlignment = 'Center'; $sf.Trimming = 'EllipsisCharacter'; $sf.FormatFlags = 'NoWrap'
-  if ($k) {
-    $title = $global:kindLabel[$k]; if ($global:alertFrom) { $title += ' - ' + $global:alertFrom }
-    $g.DrawString($title, $global:pillFont, $brush, (New-Object Drawing.RectangleF(56, 0, ($w - 56 - 60), $h)), $sf)
-  } else {
-    $g.DrawString('Messages', $global:pillFontBig, $brush, (New-Object Drawing.RectangleF(56, 0, ($w - 56 - 100), $h)), $sf)
-  }
-  $ax = $w - 50; $ay = ($h - 34) / 2
-  if ($global:other) {
-    $ci = [Math]::Abs($global:other.GetHashCode() % $global:avatarColors.Count)
-    $g.FillEllipse((New-Object Drawing.SolidBrush($global:avatarColors[$ci])), $ax, $ay, 34, 34)
-    $g.DrawEllipse((New-Object Drawing.Pen($bg, 2)), $ax, $ay, 34, 34)
-    $sfc = New-Object Drawing.StringFormat; $sfc.Alignment = 'Center'; $sfc.LineAlignment = 'Center'
-    $g.DrawString($global:other.Substring(0, 1).ToUpper(), $global:pillFont, [Drawing.Brushes]::White, (New-Object Drawing.RectangleF($ax, $ay, 34, 34)), $sfc)
-  }
-  if ($global:unread -gt 0 -and -not $k) {
-    $bx = $ax - 30; $by = ($h - 22) / 2
-    $g.FillEllipse((New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(29, 155, 240))), $bx, $by, 22, 22)
-    $sfc2 = New-Object Drawing.StringFormat; $sfc2.Alignment = 'Center'; $sfc2.LineAlignment = 'Center'
-    $nTxt = '' + $global:unread; if ($global:unread -gt 9) { $nTxt = '9+' }
-    $g.DrawString($nTxt, $global:smallFont, [Drawing.Brushes]::White, (New-Object Drawing.RectangleF($bx, $by, 22, 22)), $sfc2)
-  }
-})
-$global:pill.Add_Click({
-  $global:alertKind = $null; $global:alertFrom = ''; $global:unread = 0
-  $global:blinkTimer.Stop()
-  $global:pill.Invalidate()
-  Open-Window
-})
-
-$global:blinkTimer = New-Object Windows.Forms.Timer
-$global:blinkTimer.Interval = 450
-$global:blinkTimer.Add_Tick({
-  $global:blinkOn = -not $global:blinkOn
-  $global:pill.TopMost = $true
-  $global:pill.Invalidate()
-})
-
-function Start-Signal($kind, $from) {
-  $global:alertKind = $kind; $global:alertFrom = $from; $global:blinkOn = $false
-  if (-not $global:pill.Visible) { $global:pill.Show() }
-  $global:pill.Invalidate()
-  $global:blinkTimer.Start()
-}
-
-# pill shows when the Messages window is closed or minimized, and always while a signal blinks
-$global:watchTimer = New-Object Windows.Forms.Timer
-$global:watchTimer.Interval = 700
-$global:watchTimer.Add_Tick({
-  $open = Test-WindowOpen
-  if ($open -and -not $global:alertKind) {
-    if ($global:unread -gt 0) { $global:unread = 0; $global:pill.Invalidate() }
-    if ($global:pill.Visible) { $global:pill.Hide() }
-  } elseif (-not $global:pill.Visible) {
-    $global:pill.Show(); $global:pill.TopMost = $true
-  }
-})
-
-# ---- tray icon ----
-$global:ni = New-Object Windows.Forms.NotifyIcon
-try { $global:ni.Icon = [Drawing.Icon]::FromHandle((New-OsBitmap 32).GetHicon()) } catch { $global:ni.Icon = [Drawing.SystemIcons]::Information }
-$global:ni.Text = 'Office Signal'
-$global:ni.Visible = $true
-$menu = New-Object Windows.Forms.ContextMenuStrip
-[void]$menu.Items.Add('Open Messages', $null, { Open-Window })
-[void]$menu.Items.Add('Quit', $null, { $global:ni.Visible = $false; [Windows.Forms.Application]::Exit() })
-$global:ni.ContextMenuStrip = $menu
-$global:ni.Add_DoubleClick({ Open-Window })
-
-# ---- listen to the channel in the background (two servers, in case one is blocked) ----
-$global:q = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
-$global:seenKeys = New-Object 'System.Collections.Generic.HashSet[string]'
-$global:bgs = @()
-$listener = {
-  [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-  $last = $null
-  while ($true) {
-    try {
-      $u = $base; if ($last) { $u = "$($base)?since=$last" }
-      $req = [Net.HttpWebRequest]::Create($u)
-      $req.Timeout = 30000; $req.ReadWriteTimeout = 120000
-      $resp = $req.GetResponse()
-      $sr = New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
-      while ($true) {
-        $line = $sr.ReadLine()
-        if ($null -eq $line) { break }
-        if ($line.Contains('"event":"message"')) {
-          if ($line -match '"id":"([^"]+)"') { $last = $matches[1] }
-          $q.Enqueue($line)
-        }
-      }
-      $resp.Close()
-    } catch {}
-    Start-Sleep -Seconds 3
-  }
-}
-foreach ($srv in @('https://ntfy.sh', 'https://ntfy.envs.net')) {
-  $rs = [runspacefactory]::CreateRunspace(); $rs.Open()
-  $rs.SessionStateProxy.SetVariable('q', $global:q)
-  $rs.SessionStateProxy.SetVariable('base', "$srv/$($global:topic)/json")
-  $bg = [powershell]::Create(); $bg.Runspace = $rs
-  [void]$bg.AddScript($listener)
-  [void]$bg.BeginInvoke()
-  $global:bgs += $bg
-}
-
-function Handle-Line($line) {
-  try { $e = $line | ConvertFrom-Json } catch { return }
-  if ($e.event -ne 'message') { return }
-  try { $m = $e.message | ConvertFrom-Json } catch { return }
-  $key = '' + $m.k; if (-not $key) { $key = '' + $e.id }
-  if (-not $global:seenKeys.Add($key)) { return }
-  $from = ('' + $m.name).Trim(); if (-not $from) { $from = 'Colleague' }
-  if ($m.c) { $mine = ('' + $m.c) -eq $global:myCid } else { $mine = $from -eq $global:myName }
-  if ($mine) { return }
-  $global:other = $from
-  $kind = '' + $m.type
-  if ($global:kindLabel.ContainsKey($kind)) {
-    Start-Signal $kind $from
-  } else {
-    if (-not (Test-WindowOpen)) { $global:unread++ }
-    $global:pill.Invalidate()
-  }
-}
-
-$global:poll = New-Object Windows.Forms.Timer
-$global:poll.Interval = 250
-$global:poll.Add_Tick({
-  $item = $null
-  while ($global:q.TryDequeue([ref]$item)) { Handle-Line $item }
-})
-$global:poll.Start()
+$global:app = New-Object OsApp($global:myName, $global:myCid, $global:topic)
 
 # ---- automatic updates: check the online copy every 20 minutes ----
 function Restart-App {
-  try { $global:ni.Visible = $false } catch {}
+  try { $global:app.Shutdown() } catch {}
   try { $global:mutex.ReleaseMutex() } catch {}
   if ($global:launcher -and (Test-Path $global:launcher)) { Start-Process -FilePath $global:launcher -WindowStyle Hidden }
   [Environment]::Exit(0)
@@ -525,11 +750,7 @@ $global:updTimer.Add_Tick({
 })
 if ($global:appUrl) { $global:updTimer.Start() }
 
-$global:watchTimer.Start()
-$global:pill.Show()
-Open-Window
-[Windows.Forms.Application]::Run((New-Object Windows.Forms.ApplicationContext))
-$global:ni.Dispose()
+[Windows.Forms.Application]::Run($global:app)
 }
 catch {
   [Windows.Forms.MessageBox]::Show("Office Signal could not start:`r`n`r`n$($_.Exception.Message)", 'Office Signal') | Out-Null
