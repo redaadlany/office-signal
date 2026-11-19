@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.8'
+$global:appVersion = '2026-11-19.9'
 
 # ---- only one copy running: if already running, ask it to show the window ----
 $created = $false
@@ -70,6 +70,10 @@ public static class OsNative {
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string l);
   [DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string id);
+  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
+  [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr h);
+  [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
+  [DllImport("gdi32.dll")] public static extern int GetDeviceCaps(IntPtr dc, int index);
   public static void Drag(Form f) { ReleaseCapture(); SendMessage(f.Handle, 0xA1, (IntPtr)2, IntPtr.Zero); }
 }
 
@@ -578,11 +582,17 @@ public class ChatForm : Form {
     Hide(); App.Pill.Hide();
     Application.DoEvents(); Thread.Sleep(350);
     Bitmap shot = null;
+    IntPtr oldCtx = IntPtr.Zero;
+    try { oldCtx = OsNative.SetThreadDpiAwarenessContext((IntPtr)(-4)); } catch { }
     try {
+      int pw = 0, ph = 0;
+      try { IntPtr dc = OsNative.GetDC(IntPtr.Zero); pw = OsNative.GetDeviceCaps(dc, 118); ph = OsNative.GetDeviceCaps(dc, 117); OsNative.ReleaseDC(IntPtr.Zero, dc); } catch { }
       Rectangle b = Screen.PrimaryScreen.Bounds;
-      shot = new Bitmap(b.Width, b.Height);
-      using (Graphics g = Graphics.FromImage(shot)) g.CopyFromScreen(b.Location, Point.Empty, b.Size);
+      if (pw < b.Width || ph < b.Height) { pw = b.Width; ph = b.Height; }
+      shot = new Bitmap(pw, ph);
+      using (Graphics g = Graphics.FromImage(shot)) g.CopyFromScreen(0, 0, 0, 0, new Size(pw, ph));
     } catch { }
+    try { if (oldCtx != IntPtr.Zero) OsNative.SetThreadDpiAwarenessContext(oldCtx); } catch { }
     Show(); Activate();
     if (shot != null) App.SendShot(shot);
   }
@@ -949,17 +959,17 @@ public class OsApp : ApplicationContext {
   }
   public void SendShot(Bitmap shot) {
     Bitmap small = shot;
-    if (shot.Width > 1600) {
-      int h = shot.Height * 1600 / shot.Width;
-      small = new Bitmap(1600, h);
-      using (Graphics g = Graphics.FromImage(small)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(shot, 0, 0, 1600, h); }
+    if (shot.Width > 1920) {
+      int h = shot.Height * 1920 / shot.Width;
+      small = new Bitmap(1920, h);
+      using (Graphics g = Graphics.FromImage(small)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(shot, 0, 0, 1920, h); }
     }
     byte[] jpg;
     using (MemoryStream ms = new MemoryStream()) {
       System.Drawing.Imaging.ImageCodecInfo codec = null;
       foreach (System.Drawing.Imaging.ImageCodecInfo ci in System.Drawing.Imaging.ImageCodecInfo.GetImageEncoders()) if (ci.MimeType == "image/jpeg") codec = ci;
       System.Drawing.Imaging.EncoderParameters ep = new System.Drawing.Imaging.EncoderParameters(1);
-      ep.Param[0] = new System.Drawing.Imaging.EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 72L);
+      ep.Param[0] = new System.Drawing.Imaging.EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 90L);
       if (codec != null) small.Save(ms, codec, ep); else small.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
       jpg = ms.ToArray();
     }
