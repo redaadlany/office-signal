@@ -3,7 +3,16 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.9'
+$global:appVersion = '2026-11-19.10'
+
+function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
+function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
+$global:goodFile = Join-Path (Join-Path $env:APPDATA 'OfficeSignal') 'app.good.ps1'
+# never run an older copy than the newest one that already worked
+if (-not $global:fallbackTried -and (Test-Path $global:goodFile)) {
+  $goodText = [IO.File]::ReadAllText($global:goodFile)
+  if ((Get-VerNum (Get-TextVer $goodText)) -gt (Get-VerNum $global:appVersion)) { $global:fallbackTried = $true; iex $goodText; return }
+}
 
 # ---- only one copy running: if already running, ask it to show the window ----
 $created = $false
@@ -1023,7 +1032,7 @@ public class OsApp : ApplicationContext {
   }
 }
 '@
-$goodFile = Join-Path $global:dir 'app.good.ps1'
+$goodFile = $global:goodFile
 $built = $false
 try { Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms, System.Drawing, System.Web.Extensions -IgnoreWarnings -ErrorAction Stop; $built = $true }
 catch {
@@ -1037,8 +1046,12 @@ catch {
   }
   throw "Build failed:`r`n$det"
 }
-if ($built -and $global:appCache -and (Test-Path $global:appCache) -and -not $global:fallbackTried) {
-  try { Copy-Item -LiteralPath $global:appCache -Destination $goodFile -Force } catch {}
+if ($built -and $global:appCache -and (Test-Path $global:appCache)) {
+  try {
+    $cacheText = [IO.File]::ReadAllText($global:appCache)
+    $goodVer = ''; if (Test-Path $goodFile) { $goodVer = Get-TextVer ([IO.File]::ReadAllText($goodFile)) }
+    if ((Get-TextVer $cacheText) -eq $global:appVersion -and (Get-VerNum $global:appVersion) -ge (Get-VerNum $goodVer)) { Copy-Item -LiteralPath $global:appCache -Destination $goodFile -Force }
+  } catch {}
 }
 
 # ---- Os icon file + desktop shortcut ----
@@ -1054,7 +1067,35 @@ try {
 } catch {}
 try {
   $stable = Join-Path $global:dir 'Office Signal.bat'
-  if ($global:launcher -and (Test-Path $global:launcher) -and ($global:launcher -ne $stable)) { Copy-Item -LiteralPath $global:launcher -Destination $stable -Force }
+  $launcherText = @"
+@echo off
+start "" powershell -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -Command "`$f='%~f0'; `$s=[IO.File]::ReadAllText(`$f); `$i=`$s.LastIndexOf('#==PS==#'); iex `$s.Substring(`$i)"
+exit /b
+#==PS==#
+Add-Type -AssemblyName System.Windows.Forms
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+`$global:launcher = `$f
+`$global:topic = '$($global:topic)'
+`$global:appUrl = 'https://raw.githubusercontent.com/redaadlany/office-signal/main/app.ps1'
+`$d = Join-Path `$env:APPDATA 'OfficeSignal'
+New-Item -ItemType Directory -Force -Path `$d | Out-Null
+`$global:appCache = Join-Path `$d 'app.ps1'
+function VerOf([string]`$t) { if (`$t -match "appVersion = '([^']+)'") { try { `$q = `$matches[1].Split('.'); return ([int64](`$q[0].Replace('-','')) * 1000 + [int64]`$q[1]) } catch {} }; return [int64]0 }
+try {
+  `$url = `$global:appUrl + '?t=' + [DateTime]::UtcNow.Ticks
+  try { `$w0 = New-Object Net.WebClient; `$w0.Headers['User-Agent'] = 'OfficeSignal'; `$info = `$w0.DownloadString('https://api.github.com/repos/redaadlany/office-signal/commits/main'); if (`$info -match '"sha":\s*"([0-9a-f]{40})"') { `$url = 'https://raw.githubusercontent.com/redaadlany/office-signal/' + `$matches[1] + '/app.ps1' } } catch {}
+  `$wc = New-Object Net.WebClient; `$wc.Encoding = [Text.Encoding]::UTF8
+  `$code = `$wc.DownloadString(`$url)
+  `$cur = ''; if (Test-Path `$global:appCache) { `$cur = [IO.File]::ReadAllText(`$global:appCache) }
+  if (`$code -match '#==APP==#' -and (VerOf `$code) -ge (VerOf `$cur)) { [IO.File]::WriteAllText(`$global:appCache, `$code, (New-Object Text.UTF8Encoding `$false)) }
+} catch {}
+if (Test-Path `$global:appCache) {
+  iex ([IO.File]::ReadAllText(`$global:appCache))
+} else {
+  [Windows.Forms.MessageBox]::Show("Office Signal needs the internet the first time it starts.``r``nCheck the connection and try again.", 'Office Signal') | Out-Null
+}
+"@
+  try { [IO.File]::WriteAllText($stable, ($launcherText -replace "`r?`n", "`r`n"), [Text.Encoding]::ASCII) } catch {}
   if (Test-Path $stable) {
     $global:launcher = $stable
     $desk = [Environment]::GetFolderPath('Desktop')
@@ -1075,18 +1116,26 @@ function Restart-App {
   if ($global:launcher -and (Test-Path $global:launcher)) { Start-Process -FilePath $global:launcher -WindowStyle Hidden }
   [Environment]::Exit(0)
 }
+function Get-LatestApp {
+  $wc = New-Object Net.WebClient; $wc.Encoding = [Text.Encoding]::UTF8
+  $wc.Headers['User-Agent'] = 'OfficeSignal'
+  $url = $global:appUrl + '?t=' + [DateTime]::UtcNow.Ticks
+  try {
+    $info = $wc.DownloadString('https://api.github.com/repos/redaadlany/office-signal/commits/main')
+    if ($info -match '"sha":\s*"([0-9a-f]{40})"') { $url = 'https://raw.githubusercontent.com/redaadlany/office-signal/' + $matches[1] + '/app.ps1' }
+  } catch {}
+  $wc2 = New-Object Net.WebClient; $wc2.Encoding = [Text.Encoding]::UTF8
+  $t = $wc2.DownloadString($url)
+  if ($t -match '#==APP==#') { return $t } else { return $null }
+}
 $global:updTimer = New-Object Windows.Forms.Timer
 $global:updTimer.Interval = 5 * 60 * 1000
 $global:updTimer.Add_Tick({
   try {
-    $wc = New-Object Net.WebClient; $wc.Encoding = [Text.Encoding]::UTF8
-    $new = $wc.DownloadString($global:appUrl + '?t=' + [DateTime]::UtcNow.Ticks)
-    if ($new -match '#==APP==#' -and (Test-Path $global:appCache)) {
-      $cur = [IO.File]::ReadAllText($global:appCache)
-      if ($new -ne $cur) {
-        [IO.File]::WriteAllText($global:appCache, $new, (New-Object Text.UTF8Encoding $false))
-        Restart-App
-      }
+    $new = Get-LatestApp
+    if ($new -and (Get-VerNum (Get-TextVer $new)) -gt (Get-VerNum $global:appVersion)) {
+      [IO.File]::WriteAllText($global:appCache, $new, (New-Object Text.UTF8Encoding $false))
+      Restart-App
     }
   } catch {}
 })
