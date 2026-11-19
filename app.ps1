@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.11'
+$global:appVersion = '2026-11-19.12'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -908,6 +908,7 @@ public class OsApp : ApplicationContext {
 
   public OsApp(string name, string cid, string topic) {
     Name = name; Cid = cid; Topic = topic;
+    try { ServicePointManager.DefaultConnectionLimit = 64; ServicePointManager.Expect100Continue = false; } catch { }
     try { OsNative.SetCurrentProcessExplicitAppUserModelID("RoboTalent.OfficeSignal"); } catch { }
     try { OsUi.SetTheme(File.Exists(Path.Combine(cfgDir, "theme.txt")) && File.ReadAllText(Path.Combine(cfgDir, "theme.txt")).Trim() == "light"); } catch { }
     AppIcon = OsUi.MakeIcon(64);
