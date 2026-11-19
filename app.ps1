@@ -3,6 +3,27 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$global:appVersion = '2026-11-19.2'
+
+# ---- Windows helpers (find the Messages window, pill that does not steal focus) ----
+$cs = @"
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+public static class OsWin {
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+}
+public class OsPillForm : Form {
+  public OsPillForm() { this.DoubleBuffered = true; }
+  protected override bool ShowWithoutActivation { get { return true; } }
+  protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ExStyle |= 0x00000080 | 0x00000008; return cp; } }
+}
+"@
+Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms, System.Drawing -ErrorAction Stop
 
 # ---- who am I (asked once, saved) ----
 $global:dir = Join-Path $env:APPDATA 'OfficeSignal'
@@ -25,6 +46,7 @@ $html = @'
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Messages</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2333060a'/%3E%3Ctext x='32' y='43' font-family='Segoe UI,Arial' font-weight='600' font-size='28' fill='%23ff5c5c' text-anchor='middle'%3EOs%3C/text%3E%3C/svg%3E">
 <style>
   *{box-sizing:border-box;min-width:0}
   html,body{margin:0;height:100%}
@@ -87,12 +109,12 @@ $html = @'
   <header>
     <div class="ttl"><b>Messages</b><small><span class="dot" id="dot"></span><span id="conn">Connecting...</span></small></div>
     <button class="ic out" id="expand" type="button" title="Bigger window"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3h5v5M8 17H3v-5"/></svg></button>
-    <button class="ic" id="close" type="button" title="Minimize to bar"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m4 4 12 12M16 4 4 16"/></svg></button>
+    <button class="ic" id="close" type="button" title="Close (the small Messages bar stays)"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m4 4 12 12M16 4 4 16"/></svg></button>
   </header>
   <div class="sigs">
-    <button class="s-red" data-c="red" type="button" title="A red bar blinks on his screen">Emergency</button>
-    <button class="s-yel" data-c="yellow" type="button" title="His screen turns yellow">Come</button>
-    <button class="s-grn" data-c="green" type="button" title="His screen turns green">Call off</button>
+    <button class="s-red" data-c="red" type="button" title="His Messages bar blinks red">Emergency</button>
+    <button class="s-yel" data-c="yellow" type="button" title="His Messages bar blinks yellow">Come</button>
+    <button class="s-grn" data-c="green" type="button" title="His Messages bar blinks green">Call off</button>
   </div>
   <div id="thread"></div>
   <div class="comp">
@@ -103,7 +125,7 @@ $html = @'
 </div>
 <div id="pill"><button type="button" id="pillBtn"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2.5 9.5 17.5 3l-6.5 15-2.2-6.3z"/></svg><b>Messages</b><span class="badge" id="badge"></span><span class="stack" id="stack"></span></button></div>
 <div class="toast" id="toast"></div>
-<div class="dlg" id="dlg"><div class="box2"><h3>Send emergency?</h3><p>A red Messages bar will blink on your colleague's screen.</p><button id="yes" type="button">Send emergency</button><button id="no" type="button">Cancel</button></div></div>
+<div class="dlg" id="dlg"><div class="box2"><h3>Send emergency?</h3><p>Your colleague's Messages bar will blink red.</p><button id="yes" type="button">Send emergency</button><button id="no" type="button">Cancel</button></div></div>
 <div id="ov"><h1 id="ovt"></h1><p id="ovm"></p></div>
 <script>
 {
@@ -163,12 +185,10 @@ function add(raw, live){
   thread.appendChild(el);
   if(!live || atBottom || mine) thread.scrollTop = thread.scrollHeight;
   if(live && !mine && Date.now()/1000 - raw.time < 600){
-    if(document.hidden || $('pill').style.display === 'flex'){ unread++; $('badge').textContent = unread; $('badge').style.display = 'inline-block'; document.title = '(' + unread + ') Messages'; }
-    if(m.type === 'red'){ $('panel').style.display='none'; $('pill').style.display='flex'; $('pill').classList.add('alert'); if(!unread){ unread=1; $('badge').textContent='!'; $('badge').style.display='inline-block'; } }
-    else if(CHIP[m.type] && !DESKTOP) flash(m.type, 'From ' + m.name + (m.text ? ': ' + m.text : ''));
+    if(CHIP[m.type] && !DESKTOP) flash(m.type, 'From ' + m.name + (m.text ? ': ' + m.text : ''));
   }
 }
-function clearUnread(){ unread = 0; $('badge').style.display = 'none'; document.title = 'Messages'; }
+function clearUnread(){ unread = 0; $('badge').style.display = 'none'; }
 document.addEventListener('visibilitychange', () => { if(!document.hidden && $('pill').style.display !== 'flex') clearUnread(); });
 
 let ovTimer = null;
@@ -184,7 +204,7 @@ function toast(s){ const t = $('toast'); t.textContent = s; t.style.display = 'b
 function sizeWin(w, h){ try{ window.resizeTo(w, h); window.moveTo(screen.availLeft + screen.availWidth - w - 16, screen.availTop + screen.availHeight - h - 16); }catch(e){} }
 let wide = false;
 $('expand').addEventListener('click', () => { wide = !wide; document.body.classList.toggle('wide', wide); sizeWin(wide ? 760 : 440, wide ? 820 : 680); });
-$('close').addEventListener('click', () => { $('panel').style.display='none'; $('pill').style.display='flex'; sizeWin(360, 120); });
+$('close').addEventListener('click', () => { if(DESKTOP){ try{ window.close(); }catch(e){} } else { $('panel').style.display='none'; $('pill').style.display='flex'; } });
 $('pillBtn').addEventListener('click', () => { $('pill').classList.remove('alert'); $('pill').style.display='none'; $('panel').style.display='flex'; clearUnread(); sizeWin(wide ? 760 : 440, wide ? 820 : 680); thread.scrollTop = thread.scrollHeight; txt.focus(); });
 
 const lastIds = {}, live = {};
@@ -242,7 +262,14 @@ setConn(); loadHistory().then(() => { setConn(); SERVERS.forEach(connect); });
 $html = $html.Replace('__TOPIC__', $global:topic)
 [IO.File]::WriteAllText($global:htmlPath, $html, (New-Object Text.UTF8Encoding $false))
 
+function Get-MsgWindow { return [OsWin]::FindWindow($null, 'Messages') }
+function Test-WindowOpen {
+  $h = Get-MsgWindow
+  return ($h -ne [IntPtr]::Zero -and [OsWin]::IsWindowVisible($h) -and -not [OsWin]::IsIconic($h))
+}
 function Open-Window {
+  $h = Get-MsgWindow
+  if ($h -ne [IntPtr]::Zero) { [void][OsWin]::ShowWindow($h, 9); [void][OsWin]::SetForegroundWindow($h); return }
   $u = ([Uri]$global:htmlPath).AbsoluteUri + '#n=' + [Uri]::EscapeDataString($global:myName) + '&c=' + $global:myCid
   $wa = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
   $x = $wa.Right - 440 - 16; $y = $wa.Bottom - 680 - 16
@@ -257,104 +284,158 @@ $created = $false
 $global:mutex = New-Object System.Threading.Mutex($true, 'Local\OfficeSignalApp', [ref]$created)
 if (-not $created) { Open-Window; return }
 
-# ---- full-screen colour flash (click-through, does not steal focus) ----
-$cs = @"
-using System.Windows.Forms;
-public class SignalFlashForm : Form {
-  protected override bool ShowWithoutActivation { get { return true; } }
-  protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ExStyle |= 0x00080000 | 0x00000020 | 0x00000080 | 0x00000008; return cp; } }
+# ---- app icon: rounded square with "Os" (Adobe style) ----
+function New-OsBitmap([int]$size) {
+  $bmp = New-Object Drawing.Bitmap($size, $size, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $g = [Drawing.Graphics]::FromImage($bmp)
+  $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'AntiAliasGridFit'
+  $g.Clear([Drawing.Color]::Transparent)
+  $r = [int]($size * 0.18); $p = New-Object Drawing.Drawing2D.GraphicsPath
+  $p.AddArc(0, 0, 2 * $r, 2 * $r, 180, 90); $p.AddArc($size - 2 * $r - 1, 0, 2 * $r, 2 * $r, 270, 90)
+  $p.AddArc($size - 2 * $r - 1, $size - 2 * $r - 1, 2 * $r, 2 * $r, 0, 90); $p.AddArc(0, $size - 2 * $r - 1, 2 * $r, 2 * $r, 90, 90); $p.CloseFigure()
+  $g.FillPath((New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(51, 6, 10))), $p)
+  $fs = [Math]::Max(6, $size * 0.42)
+  $font = New-Object Drawing.Font('Segoe UI Semibold', [single]$fs, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
+  $sf = New-Object Drawing.StringFormat; $sf.Alignment = 'Center'; $sf.LineAlignment = 'Center'
+  $g.DrawString('Os', $font, (New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(255, 92, 92))), (New-Object Drawing.RectangleF(0, [single]($size * 0.02), $size, $size)), $sf)
+  $g.Dispose()
+  return $bmp
 }
-public class AlertBarForm : Form {
-  protected override bool ShowWithoutActivation { get { return true; } }
-  protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ExStyle |= 0x00000080 | 0x00000008; return cp; } }
+$global:icoPath = Join-Path $global:dir 'OfficeSignal.ico'
+try {
+  $big = New-OsBitmap 256; $ms = New-Object IO.MemoryStream
+  $big.Save($ms, [Drawing.Imaging.ImageFormat]::Png); $png = $ms.ToArray()
+  $fsI = [IO.File]::Create($global:icoPath); $bw = New-Object IO.BinaryWriter($fsI)
+  $bw.Write([UInt16]0); $bw.Write([UInt16]1); $bw.Write([UInt16]1)
+  $bw.Write([Byte]0); $bw.Write([Byte]0); $bw.Write([Byte]0); $bw.Write([Byte]0)
+  $bw.Write([UInt16]1); $bw.Write([UInt16]32); $bw.Write([UInt32]$png.Length); $bw.Write([UInt32]22)
+  $bw.Write($png); $bw.Close()
+} catch {}
+
+# ---- keep a copy of the launcher + a desktop shortcut with the Os icon ----
+try {
+  $stable = Join-Path $global:dir 'Office Signal.bat'
+  if ($global:launcher -and (Test-Path $global:launcher) -and ($global:launcher -ne $stable)) { Copy-Item -LiteralPath $global:launcher -Destination $stable -Force }
+  if (Test-Path $stable) {
+    $global:launcher = $stable
+    $desk = [Environment]::GetFolderPath('Desktop')
+    $sh = New-Object -ComObject WScript.Shell
+    $lnk = $sh.CreateShortcut((Join-Path $desk 'Office Signal.lnk'))
+    $lnk.TargetPath = $stable; $lnk.WorkingDirectory = $global:dir
+    $lnk.IconLocation = "$($global:icoPath),0"; $lnk.WindowStyle = 7; $lnk.Description = 'Office Signal'
+    $lnk.Save()
+  }
+} catch {}
+
+# ---- the floating pill (bottom-right): Messages bar, blinks in colour for signals ----
+$global:kindColor = @{ red = [Drawing.Color]::FromArgb(244, 33, 46); yellow = [Drawing.Color]::FromArgb(255, 212, 0); green = [Drawing.Color]::FromArgb(0, 186, 124) }
+$global:kindDark  = @{ red = [Drawing.Color]::FromArgb(122, 0, 0); yellow = [Drawing.Color]::FromArgb(122, 96, 0); green = [Drawing.Color]::FromArgb(0, 84, 56) }
+$global:kindLabel = @{ red = 'Emergency'; yellow = 'Come please'; green = 'Call off - break' }
+$global:alertKind = $null; $global:alertFrom = ''; $global:blinkOn = $false
+$global:unread = 0; $global:other = ''
+$global:pillBg = [Drawing.Color]::FromArgb(32, 35, 39)
+$global:avatarColors = @([Drawing.Color]::FromArgb(120, 86, 255), [Drawing.Color]::FromArgb(0, 186, 124), [Drawing.Color]::FromArgb(249, 24, 128), [Drawing.Color]::FromArgb(255, 122, 0), [Drawing.Color]::FromArgb(29, 155, 240), [Drawing.Color]::FromArgb(212, 165, 0))
+
+$pw = 320; $ph = 62
+$global:pill = New-Object OsPillForm
+$global:pill.FormBorderStyle = 'None'; $global:pill.ShowInTaskbar = $false; $global:pill.TopMost = $true; $global:pill.StartPosition = 'Manual'
+$global:pill.BackColor = [Drawing.Color]::Black
+$wa0 = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+$global:pill.Bounds = New-Object Drawing.Rectangle(($wa0.Right - $pw - 16), ($wa0.Bottom - $ph - 16), $pw, $ph)
+$gp = New-Object Drawing.Drawing2D.GraphicsPath
+$gp.AddArc(0, 0, $ph, $ph, 90, 180); $gp.AddArc($pw - $ph, 0, $ph, $ph, 270, 180); $gp.CloseFigure()
+$global:pill.Region = New-Object Drawing.Region($gp)
+$global:pill.Cursor = [Windows.Forms.Cursors]::Hand
+$global:pillFont = New-Object Drawing.Font('Segoe UI Semibold', [single]15, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
+$global:pillFontBig = New-Object Drawing.Font('Segoe UI Semibold', [single]18, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
+$global:smallFont = New-Object Drawing.Font('Segoe UI Semibold', [single]12, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
+
+$global:pill.Add_Paint({
+  param($s, $e)
+  $g = $e.Graphics; $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'AntiAliasGridFit'
+  $w = $s.Width; $h = $s.Height
+  $k = $global:alertKind
+  if ($k) { if ($global:blinkOn) { $bg = $global:kindDark[$k] } else { $bg = $global:kindColor[$k] } } else { $bg = $global:pillBg }
+  $g.Clear($bg)
+  $path = New-Object Drawing.Drawing2D.GraphicsPath
+  $path.AddArc(0, 0, $h - 1, $h - 1, 90, 180); $path.AddArc($w - $h, 0, $h - 1, $h - 1, 270, 180); $path.CloseFigure()
+  $g.DrawPath((New-Object Drawing.Pen([Drawing.Color]::FromArgb(47, 51, 54), 1.5)), $path)
+  if ($k -eq 'yellow' -and -not $global:blinkOn) { $fg = [Drawing.Color]::FromArgb(15, 20, 25) } else { $fg = [Drawing.Color]::FromArgb(231, 233, 234) }
+  $pen = New-Object Drawing.Pen($fg, 2); $pen.LineJoin = 'Round'
+  $cy = $h / 2
+  $pts = [Drawing.PointF[]]@(
+    (New-Object Drawing.PointF(24, ($cy - 1))), (New-Object Drawing.PointF(42, ($cy - 9))),
+    (New-Object Drawing.PointF(34, ($cy + 9))), (New-Object Drawing.PointF(31.5, ($cy + 1.5))))
+  $g.DrawPolygon($pen, $pts)
+  $brush = New-Object Drawing.SolidBrush($fg)
+  $sf = New-Object Drawing.StringFormat; $sf.LineAlignment = 'Center'; $sf.Trimming = 'EllipsisCharacter'; $sf.FormatFlags = 'NoWrap'
+  if ($k) {
+    $title = $global:kindLabel[$k]; if ($global:alertFrom) { $title += ' - ' + $global:alertFrom }
+    $g.DrawString($title, $global:pillFont, $brush, (New-Object Drawing.RectangleF(56, 0, ($w - 56 - 60), $h)), $sf)
+  } else {
+    $g.DrawString('Messages', $global:pillFontBig, $brush, (New-Object Drawing.RectangleF(56, 0, ($w - 56 - 100), $h)), $sf)
+  }
+  $ax = $w - 50; $ay = ($h - 34) / 2
+  if ($global:other) {
+    $ci = [Math]::Abs($global:other.GetHashCode() % $global:avatarColors.Count)
+    $g.FillEllipse((New-Object Drawing.SolidBrush($global:avatarColors[$ci])), $ax, $ay, 34, 34)
+    $g.DrawEllipse((New-Object Drawing.Pen($bg, 2)), $ax, $ay, 34, 34)
+    $sfc = New-Object Drawing.StringFormat; $sfc.Alignment = 'Center'; $sfc.LineAlignment = 'Center'
+    $g.DrawString($global:other.Substring(0, 1).ToUpper(), $global:pillFont, [Drawing.Brushes]::White, (New-Object Drawing.RectangleF($ax, $ay, 34, 34)), $sfc)
+  }
+  if ($global:unread -gt 0 -and -not $k) {
+    $bx = $ax - 30; $by = ($h - 22) / 2
+    $g.FillEllipse((New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(29, 155, 240))), $bx, $by, 22, 22)
+    $sfc2 = New-Object Drawing.StringFormat; $sfc2.Alignment = 'Center'; $sfc2.LineAlignment = 'Center'
+    $nTxt = '' + $global:unread; if ($global:unread -gt 9) { $nTxt = '9+' }
+    $g.DrawString($nTxt, $global:smallFont, [Drawing.Brushes]::White, (New-Object Drawing.RectangleF($bx, $by, 22, 22)), $sfc2)
+  }
+})
+$global:pill.Add_Click({
+  $global:alertKind = $null; $global:alertFrom = ''; $global:unread = 0
+  $global:blinkTimer.Stop()
+  $global:pill.Invalidate()
+  Open-Window
+})
+
+$global:blinkTimer = New-Object Windows.Forms.Timer
+$global:blinkTimer.Interval = 450
+$global:blinkTimer.Add_Tick({
+  $global:blinkOn = -not $global:blinkOn
+  $global:pill.TopMost = $true
+  $global:pill.Invalidate()
+})
+
+function Start-Signal($kind, $from) {
+  $global:alertKind = $kind; $global:alertFrom = $from; $global:blinkOn = $false
+  if (-not $global:pill.Visible) { $global:pill.Show() }
+  $global:pill.Invalidate()
+  $global:blinkTimer.Start()
 }
-"@
-$global:flashType = 'System.Windows.Forms.Form'; $global:barType = 'System.Windows.Forms.Form'
-try { Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms -ErrorAction Stop; $global:flashType = 'SignalFlashForm'; $global:barType = 'AlertBarForm' } catch {}
 
-$global:titles = @{ red = 'EMERGENCY!'; yellow = 'COME PLEASE'; green = 'CALL OFF - BREAK' }
-$global:colors = @{ red = [Drawing.Color]::FromArgb(214, 40, 40); yellow = [Drawing.Color]::FromArgb(242, 194, 0); green = [Drawing.Color]::FromArgb(31, 157, 85) }
-$global:darkRed = [Drawing.Color]::FromArgb(122, 0, 0)
-$global:flash = $null; $global:flashKind = ''; $global:flashStart = Get-Date
-
-$global:flashTimer = New-Object Windows.Forms.Timer
-$global:flashTimer.Interval = 125
-$global:flashTimer.Add_Tick({
-  if (-not $global:flash) { $global:flashTimer.Stop(); return }
-  $el = ((Get-Date) - $global:flashStart).TotalMilliseconds
-  if ($el -ge 2000) { $global:flashTimer.Stop(); try { $global:flash.Close(); $global:flash.Dispose() } catch {}; $global:flash = $null; return }
-  if ($global:flashKind -eq 'red') {
-    if ([int][Math]::Floor($el / 250) % 2 -eq 1) { $global:flash.BackColor = $global:darkRed } else { $global:flash.BackColor = $global:colors['red'] }
+# pill shows when the Messages window is closed or minimized, and always while a signal blinks
+$global:watchTimer = New-Object Windows.Forms.Timer
+$global:watchTimer.Interval = 700
+$global:watchTimer.Add_Tick({
+  $open = Test-WindowOpen
+  if ($open -and -not $global:alertKind) {
+    if ($global:unread -gt 0) { $global:unread = 0; $global:pill.Invalidate() }
+    if ($global:pill.Visible) { $global:pill.Hide() }
+  } elseif (-not $global:pill.Visible) {
+    $global:pill.Show(); $global:pill.TopMost = $true
   }
 })
 
-function Show-Flash($kind, $line) {
-  if ($global:flash) { try { $global:flash.Close(); $global:flash.Dispose() } catch {} }
-  $fm = New-Object $global:flashType
-  $fm.FormBorderStyle = 'None'; $fm.ShowInTaskbar = $false; $fm.TopMost = $true
-  $fm.StartPosition = 'Manual'; $fm.Bounds = [Windows.Forms.SystemInformation]::VirtualScreen
-  $fm.BackColor = $global:colors[$kind]; $fm.Opacity = 0.8
-  $lb = New-Object Windows.Forms.Label
-  $lb.Dock = 'Fill'; $lb.TextAlign = 'MiddleCenter'; $lb.BackColor = [Drawing.Color]::Transparent
-  $lb.Font = New-Object Drawing.Font('Segoe UI', 40, [Drawing.FontStyle]::Bold)
-  if ($kind -eq 'yellow') { $lb.ForeColor = [Drawing.Color]::FromArgb(30, 30, 30) } else { $lb.ForeColor = [Drawing.Color]::White }
-  $lb.Text = $global:titles[$kind] + "`r`n" + $line
-  $fm.Controls.Add($lb)
-  $global:flash = $fm; $global:flashKind = $kind; $global:flashStart = Get-Date
-  $fm.Show()
-  $global:flashTimer.Start()
-}
-
-# ---- emergency: small red Messages bar that blinks until clicked ----
-$global:bar = $null; $global:barOn = $false
-$global:barTimer = New-Object Windows.Forms.Timer
-$global:barTimer.Interval = 450
-$global:barTimer.Add_Tick({
-  if (-not $global:bar) { $global:barTimer.Stop(); return }
-  $global:barOn = -not $global:barOn
-  if ($global:barOn) { $global:bar.BackColor = $global:darkRed } else { $global:bar.BackColor = $global:colors['red'] }
-  $global:bar.TopMost = $true
-})
-function Close-AlertBar {
-  $global:barTimer.Stop()
-  if ($global:bar) { try { $global:bar.Close(); $global:bar.Dispose() } catch {}; $global:bar = $null }
-}
-function Show-AlertBar($from, $text) {
-  Close-AlertBar
-  $fm = New-Object $global:barType
-  $fm.FormBorderStyle = 'None'; $fm.ShowInTaskbar = $false; $fm.TopMost = $true; $fm.StartPosition = 'Manual'
-  $w = 330; $h = 58
-  $wa = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-  $fm.Bounds = New-Object Drawing.Rectangle(($wa.Right - $w - 16), ($wa.Bottom - $h - 16), $w, $h)
-  $fm.BackColor = $global:colors['red']
-  $gp = New-Object Drawing.Drawing2D.GraphicsPath
-  $gp.AddArc(0, 0, $h, $h, 90, 180); $gp.AddArc($w - $h, 0, $h, $h, 270, 180); $gp.CloseFigure()
-  $fm.Region = New-Object Drawing.Region($gp)
-  $lb = New-Object Windows.Forms.Label
-  $lb.Dock = 'Fill'; $lb.TextAlign = 'MiddleCenter'; $lb.AutoEllipsis = $true
-  $lb.ForeColor = [Drawing.Color]::White; $lb.BackColor = [Drawing.Color]::Transparent
-  $lb.Font = New-Object Drawing.Font('Segoe UI', 12, [Drawing.FontStyle]::Bold)
-  $lb.Cursor = [Windows.Forms.Cursors]::Hand
-  $t = "Messages  -  Emergency from $from"; if ($text) { $t += ": $text" }
-  $lb.Text = $t
-  $lb.Add_Click({ Close-AlertBar; Open-Window })
-  $fm.Controls.Add($lb)
-  $global:bar = $fm; $global:barOn = $false
-  $fm.Show()
-  $global:barTimer.Start()
-}
-
 # ---- tray icon ----
 $global:ni = New-Object Windows.Forms.NotifyIcon
-$global:ni.Icon = [Drawing.SystemIcons]::Information
+try { $global:ni.Icon = [Drawing.Icon]::FromHandle((New-OsBitmap 32).GetHicon()) } catch { $global:ni.Icon = [Drawing.SystemIcons]::Information }
 $global:ni.Text = 'Office Signal'
 $global:ni.Visible = $true
 $menu = New-Object Windows.Forms.ContextMenuStrip
-[void]$menu.Items.Add('Open', $null, { Open-Window })
+[void]$menu.Items.Add('Open Messages', $null, { Open-Window })
 [void]$menu.Items.Add('Quit', $null, { $global:ni.Visible = $false; [Windows.Forms.Application]::Exit() })
 $global:ni.ContextMenuStrip = $menu
 $global:ni.Add_DoubleClick({ Open-Window })
-$global:ni.Add_BalloonTipClicked({ Open-Window })
 
 # ---- listen to the channel in the background (two servers, in case one is blocked) ----
 $global:q = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
@@ -402,15 +483,13 @@ function Handle-Line($line) {
   $from = ('' + $m.name).Trim(); if (-not $from) { $from = 'Colleague' }
   if ($m.c) { $mine = ('' + $m.c) -eq $global:myCid } else { $mine = $from -eq $global:myName }
   if ($mine) { return }
-  $kind = '' + $m.type; $text = ('' + $m.text).Trim()
-  if ($kind -eq 'red') {
-    Show-AlertBar $from $text
-  } elseif ($global:titles.ContainsKey($kind)) {
-    $line2 = 'From ' + $from; if ($text) { $line2 += ': ' + $text }
-    Show-Flash $kind $line2
-    $global:ni.ShowBalloonTip(6000, $global:titles[$kind], $line2, [Windows.Forms.ToolTipIcon]::Warning)
-  } elseif ($text) {
-    $global:ni.ShowBalloonTip(5000, "New message from $from", $text, [Windows.Forms.ToolTipIcon]::Info)
+  $global:other = $from
+  $kind = '' + $m.type
+  if ($global:kindLabel.ContainsKey($kind)) {
+    Start-Signal $kind $from
+  } else {
+    if (-not (Test-WindowOpen)) { $global:unread++ }
+    $global:pill.Invalidate()
   }
 }
 
@@ -426,7 +505,7 @@ $global:poll.Start()
 function Restart-App {
   try { $global:ni.Visible = $false } catch {}
   try { $global:mutex.ReleaseMutex() } catch {}
-  if ($global:launcher -and (Test-Path $global:launcher)) { Start-Process -FilePath $global:launcher }
+  if ($global:launcher -and (Test-Path $global:launcher)) { Start-Process -FilePath $global:launcher -WindowStyle Hidden }
   [Environment]::Exit(0)
 }
 $global:updTimer = New-Object Windows.Forms.Timer
@@ -446,8 +525,9 @@ $global:updTimer.Add_Tick({
 })
 if ($global:appUrl) { $global:updTimer.Start() }
 
+$global:watchTimer.Start()
+$global:pill.Show()
 Open-Window
-$global:ni.ShowBalloonTip(4000, 'Office Signal is running', 'It stays here next to the clock. Double-click the icon to open Messages.', [Windows.Forms.ToolTipIcon]::Info)
 [Windows.Forms.Application]::Run((New-Object Windows.Forms.ApplicationContext))
 $global:ni.Dispose()
 }
