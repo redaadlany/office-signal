@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.3'
+$global:appVersion = '2026-11-19.4'
 
 # ---- only one copy running: if already running, ask it to show the window ----
 $created = $false
@@ -53,16 +53,46 @@ public static class OsNative {
   [DllImport("user32.dll")] public static extern bool ReleaseCapture();
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string l);
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string id);
   public static void Drag(Form f) { ReleaseCapture(); SendMessage(f.Handle, 0xA1, (IntPtr)2, IntPtr.Zero); }
 }
 
 public static class OsUi {
+  public static bool Light;
   public static Color Bg = Color.FromArgb(22, 24, 28);
   public static Color Box = Color.FromArgb(32, 35, 39);
   public static Color Bubble = Color.FromArgb(47, 51, 54);
   public static Color Line = Color.FromArgb(47, 51, 54);
   public static Color Ink = Color.FromArgb(231, 233, 234);
   public static Color Mute = Color.FromArgb(113, 118, 123);
+  public static Color PillBg = Color.FromArgb(32, 35, 39);
+  public static Color PillLine = Color.FromArgb(47, 51, 54);
+  public static Color PillInk = Color.FromArgb(231, 233, 234);
+  public static void SetTheme(bool light) {
+    Light = light;
+    if (light) {
+      Bg = Color.White; Box = Color.FromArgb(239, 243, 244); Bubble = Color.FromArgb(239, 243, 244);
+      Line = Color.FromArgb(207, 217, 222); Ink = Color.FromArgb(15, 20, 25); Mute = Color.FromArgb(83, 100, 113);
+    } else {
+      Bg = Color.FromArgb(22, 24, 28); Box = Color.FromArgb(32, 35, 39); Bubble = Color.FromArgb(47, 51, 54);
+      Line = Color.FromArgb(47, 51, 54); Ink = Color.FromArgb(231, 233, 234); Mute = Color.FromArgb(113, 118, 123);
+    }
+  }
+  public static Color Hover() { return Mix(Bg, Ink, 0.09f); }
+  public static void DrawCentered(Graphics g, string text, Font f, RectangleF r, Color c) {
+    using (SolidBrush b = new SolidBrush(c)) using (StringFormat sf = new StringFormat()) {
+      sf.Alignment = StringAlignment.Center; sf.LineAlignment = StringAlignment.Center;
+      TextRenderingHint old = g.TextRenderingHint; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+      g.DrawString(text, f, b, new RectangleF(r.X, r.Y + 0.5f, r.Width, r.Height), sf);
+      g.TextRenderingHint = old;
+    }
+  }
+  public static void DrawAvatar(Graphics g, string name, RectangleF r, Color ring, Font f) {
+    Color c = AvatarColor(name);
+    using (SolidBrush b = new SolidBrush(c)) g.FillEllipse(b, r);
+    if (ring != Color.Empty) { using (Pen pn = new Pen(ring, 2f)) g.DrawEllipse(pn, r); }
+    DrawCentered(g, Initial(name), f, r, Color.White);
+  }
   public static Color Blue = Color.FromArgb(29, 155, 240);
   public static Color Red = Color.FromArgb(244, 33, 46);
   public static Color Yellow = Color.FromArgb(255, 212, 0);
@@ -84,8 +114,8 @@ public static class OsUi {
     return p;
   }
   public static bool IsSignal(string k) { return k == "red" || k == "yellow" || k == "green"; }
-  public static Color KindColor(string k) { if (k == "red") return Red; if (k == "yellow") return Yellow; return Green; }
-  public static Color KindDark(string k) { if (k == "red") return Color.FromArgb(122, 0, 0); if (k == "yellow") return Color.FromArgb(122, 96, 0); return Color.FromArgb(0, 84, 56); }
+  public static Color KindColor(string k) { if (k == "red") return Red; if (k == "yellow") return Yellow; if (k == "msg") return Blue; return Green; }
+  public static Color KindDark(string k) { if (k == "red") return Color.FromArgb(122, 0, 0); if (k == "yellow") return Color.FromArgb(122, 96, 0); if (k == "msg") return Color.FromArgb(11, 79, 128); return Color.FromArgb(0, 84, 56); }
   public static Color KindText(string k) { return k == "yellow" ? DarkText : Color.White; }
   public static string KindLabel(string k) { if (k == "red") return "Emergency"; if (k == "yellow") return "Come please"; return "Call off - break"; }
   public static Color AvatarColor(string s) {
@@ -158,7 +188,7 @@ public class IconBtn : Control {
     Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
     g.Clear(BackColor);
     RectangleF r = new RectangleF(0.5f, 0.5f, Width - 2, Height - 2);
-    if (hover) { using (GraphicsPath p = OsUi.Round(r, Kind == "send" ? Height / 2f : 8)) using (SolidBrush b = new SolidBrush(Kind == "send" ? Color.FromArgb(30, 29, 155, 240) : Color.FromArgb(42, 46, 51))) g.FillPath(b, p); }
+    if (hover) { using (GraphicsPath p = OsUi.Round(r, Kind == "send" ? Height / 2f : 8)) using (SolidBrush b = new SolidBrush(Kind == "send" ? Color.FromArgb(30, 29, 155, 240) : OsUi.Hover())) g.FillPath(b, p); }
     if (Outline) { using (GraphicsPath p = OsUi.Round(r, 8)) using (Pen pn = new Pen(OsUi.Blue, 1)) g.DrawPath(pn, p); }
     float cx = Width / 2f, cy = Height / 2f;
     Color col = Kind == "send" ? OsUi.Blue : OsUi.Ink;
@@ -172,6 +202,12 @@ public class IconBtn : Control {
         g.DrawLines(pen, new PointF[] { new PointF(cx - 1, cy + 7), new PointF(cx - 7, cy + 7), new PointF(cx - 7, cy + 1) });
       } else if (Kind == "min") {
         g.DrawLine(pen, cx - 7, cy + 1, cx + 7, cy + 1);
+      } else if (Kind == "gear") {
+        g.DrawEllipse(pen, cx - 3, cy - 3, 6, 6);
+        for (int i = 0; i < 8; i++) {
+          double a = i * Math.PI / 4;
+          g.DrawLine(pen, (float)(cx + Math.Cos(a) * 5.5), (float)(cy + Math.Sin(a) * 5.5), (float)(cx + Math.Cos(a) * 8), (float)(cy + Math.Sin(a) * 8));
+        }
       } else {
         g.DrawPolygon(pen, new PointF[] { new PointF(cx - 8, cy), new PointF(cx + 8, cy - 7), new PointF(cx + 1, cy + 8), new PointF(cx - 1.5f, cy + 1.5f) });
       }
@@ -199,11 +235,21 @@ public class ChatView : Control {
     Size s = TextRenderer.MeasureText(m.Text == "" ? " " : m.Text, fBody, new Size(MaxBubble() - 28, int.MaxValue), WrapFlags);
     return new Size(Math.Min(MaxBubble(), s.Width + 28), s.Height + 18);
   }
-  int ItemHeight(OsMsg m) {
-    if (OsUi.IsSignal(m.Type)) return 30 + 4 + 16 + 12;
-    return BubbleSize(m).Height + 4 + 16 + 8;
+  public string Peer = "";
+  Font fVu = new Font("Segoe UI", 8.25f);
+  Font fAv = new Font("Segoe UI Semibold", 6.5f);
+  int LastSeenIndex() {
+    int idx = -1;
+    if (SeenUpTo <= 0) return -1;
+    for (int i = 0; i < Items.Count; i++) { if (Items[i].Mine && Items[i].Time <= SeenUpTo) idx = i; }
+    return idx;
   }
-  int ContentHeight() { int h = 14; foreach (OsMsg m in Items) h += ItemHeight(m); return h + 6; }
+  int ItemHeight(OsMsg m, bool vu) {
+    int h = OsUi.IsSignal(m.Type) ? 30 + 4 + 16 + 12 : BubbleSize(m).Height + 4 + 16 + 8;
+    if (vu) h += 18;
+    return h;
+  }
+  int ContentHeight() { int h = 14; int ls = LastSeenIndex(); for (int i = 0; i < Items.Count; i++) h += ItemHeight(Items[i], i == ls); return h + 6; }
   int MaxScroll() { return Math.Max(0, ContentHeight() - Height); }
   public void ScrollToEnd() { scroll = MaxScroll(); Invalidate(); }
   public void Add(OsMsg m) {
@@ -229,12 +275,11 @@ public class ChatView : Control {
       TextRenderer.DrawText(g, Loaded ? "No messages yet.\nSay hello below." : "Loading...", fBody, new Rectangle(0, 0, Width, Height), OsUi.Mute, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
       return;
     }
-    int lastSeenMine = -1;
-    for (int i = 0; i < Items.Count; i++) { if (Items[i].Mine && !OsUi.IsSignal(Items[i].Type) && SeenUpTo > 0 && Items[i].Time <= SeenUpTo) lastSeenMine = i; }
+    int lastSeenMine = LastSeenIndex();
     int y = 14 - scroll;
     for (int i = 0; i < Items.Count; i++) {
       OsMsg m = Items[i];
-      int h = ItemHeight(m);
+      int h = ItemHeight(m, i == lastSeenMine);
       if (y + h < 0 || y > Height) { y += h; continue; }
       string meta = (m.Mine ? "" : m.Name + " - ") + OsUi.Clock(m.Time);
       if (OsUi.IsSignal(m.Type)) {
@@ -252,8 +297,14 @@ public class ChatView : Control {
         Color fill = m.Mine ? OsUi.Blue : OsUi.Bubble;
         using (GraphicsPath p = OsUi.Round(r, Math.Min(18, bs.Height / 2f))) using (SolidBrush b = new SolidBrush(fill)) g.FillPath(b, p);
         TextRenderer.DrawText(g, m.Text, fBody, new Rectangle(x + 14, y + 9, bs.Width - 28, bs.Height - 18), m.Mine ? Color.White : OsUi.Ink, fill, WrapFlags);
-        if (i == lastSeenMine) meta += "  -  Vu";
-        TextRenderer.DrawText(g, meta, fMeta, new Rectangle(m.Mine ? 0 : x + 6, y + bs.Height + 4, m.Mine ? Width - 20 : Width, 16), i == lastSeenMine ? OsUi.Blue : OsUi.Mute, m.Mine ? TextFormatFlags.Right : TextFormatFlags.Left);
+        TextRenderer.DrawText(g, meta, fMeta, new Rectangle(m.Mine ? 0 : x + 6, y + bs.Height + 4, m.Mine ? Width - 20 : Width, 16), OsUi.Mute, m.Mine ? TextFormatFlags.Right : TextFormatFlags.Left);
+      }
+      if (i == lastSeenMine) {
+        int vy = y + h - 18 - (OsUi.IsSignal(m.Type) ? 10 : 6);
+        Size vs = TextRenderer.MeasureText("Vu", fVu);
+        int vx = OsUi.IsSignal(m.Type) ? (Width + 18 - vs.Width) / 2 : Width - 20 - vs.Width;
+        TextRenderer.DrawText(g, "Vu", fVu, new Point(vx, vy), OsUi.Mute);
+        if (Peer != "") OsUi.DrawAvatar(g, Peer, new RectangleF(vx - 18, vy + 1, 14, 14), Color.Empty, fAv);
       }
       y += h;
     }
@@ -285,20 +336,21 @@ public class ConfirmForm : Form {
 
 public class Header : Control {
   ChatForm form;
-  public IconBtn Expand, Close, Min;
+  public IconBtn Expand, Close, Min, Gear;
   Font fTitle = new Font("Segoe UI Semibold", 14f);
   Font fSub = new Font("Segoe UI", 9f);
   public Header(ChatForm f) {
     SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     form = f; BackColor = OsUi.Bg;
-    Min = new IconBtn("min"); Expand = new IconBtn("expand"); Expand.Outline = true; Close = new IconBtn("close");
-    Controls.Add(Min); Controls.Add(Expand); Controls.Add(Close);
+    Gear = new IconBtn("gear"); Min = new IconBtn("min"); Expand = new IconBtn("expand"); Close = new IconBtn("close");
+    Controls.Add(Gear); Controls.Add(Min); Controls.Add(Expand); Controls.Add(Close);
   }
   protected override void OnResize(EventArgs e) {
     base.OnResize(e);
     Close.Bounds = new Rectangle(Width - 50, 16, 38, 38);
     Expand.Bounds = new Rectangle(Width - 94, 16, 38, 38);
     Min.Bounds = new Rectangle(Width - 138, 16, 38, 38);
+    Gear.Bounds = new Rectangle(Width - 182, 16, 38, 38);
   }
   protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if (e.Button == MouseButtons.Left) OsNative.Drag(form); }
   protected override void OnPaint(PaintEventArgs e) {
@@ -322,6 +374,7 @@ public class ChatForm : Form {
   IconBtn sendBtn;
   public bool Quitting;
   bool wide;
+  SettingsView settings;
 
   public ChatForm(OsApp app) {
     App = app;
@@ -360,7 +413,10 @@ public class ChatForm : Form {
     bRed.Click += delegate { Signal("red"); };
     bYel.Click += delegate { Signal("yellow"); };
     bGrn.Click += delegate { Signal("green"); };
-    KeyDown += delegate(object o, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) Hide(); };
+    KeyDown += delegate(object o, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) { if (settings.Visible) settings.Visible = false; else Hide(); } };
+    settings = new SettingsView(this); settings.Visible = false;
+    Controls.Add(settings);
+    Head.Gear.Click += delegate { settings.Open(); };
     DoLayout(); LayoutSignals(); LayoutBottom();
   }
   protected override CreateParams CreateParams {
@@ -387,6 +443,14 @@ public class ChatForm : Form {
     sig.Bounds = new Rectangle(1, 71, w, 68);
     bottom.Bounds = new Rectangle(1, h + 1 - 72, w, 72);
     View.Bounds = new Rectangle(1, 139, w, h - 138 - 72);
+    if (settings != null) settings.Bounds = new Rectangle(1, 1, w, h);
+  }
+  public void ApplyTheme() {
+    BackColor = OsUi.Line;
+    foreach (Control c in new Control[] { Head, sig, View, bottom, Head.Gear, Head.Min, Head.Expand, Head.Close, bRed, bYel, bGrn }) { c.BackColor = OsUi.Bg; c.Invalidate(); }
+    input.BackColor = OsUi.Box; input.ForeColor = OsUi.Ink; sendBtn.BackColor = OsUi.Box; sendBtn.Invalidate();
+    settings.ApplyTheme();
+    Invalidate(true);
   }
   void LayoutSignals() {
     int gap = 8, pad = 12, bw = (sig.Width - pad * 2 - gap * 2) / 3;
@@ -419,11 +483,73 @@ public class ChatForm : Form {
   }
 }
 
+public class SettingsView : Control {
+  ChatForm form;
+  IconBtn close;
+  TextBox nameBox;
+  RoundBtn save;
+  Font fTitle = new Font("Segoe UI Semibold", 14f);
+  Font fLbl = new Font("Segoe UI", 9f);
+  Font fSeg = new Font("Segoe UI Semibold", 10f);
+  Rectangle segRect;
+  public SettingsView(ChatForm f) {
+    SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+    form = f; BackColor = OsUi.Bg; Cursor = Cursors.Default;
+    close = new IconBtn("close");
+    nameBox = new TextBox(); nameBox.BorderStyle = BorderStyle.None; nameBox.Font = new Font("Segoe UI", 11f); nameBox.MaxLength = 40;
+    save = new RoundBtn("Save", OsUi.Blue, Color.White);
+    Controls.Add(close); Controls.Add(nameBox); Controls.Add(save);
+    close.Click += delegate { Visible = false; form.FocusInput(); };
+    save.Click += delegate { form.App.SetName(nameBox.Text); Visible = false; form.FocusInput(); };
+    nameBox.KeyDown += delegate(object o, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; form.App.SetName(nameBox.Text); Visible = false; form.FocusInput(); } };
+    ApplyTheme();
+  }
+  public void Open() { nameBox.Text = form.App.Name; Visible = true; BringToFront(); nameBox.Focus(); nameBox.SelectAll(); }
+  public void ApplyTheme() {
+    BackColor = OsUi.Bg; close.BackColor = OsUi.Bg; save.BackColor = OsUi.Bg;
+    nameBox.BackColor = OsUi.Box; nameBox.ForeColor = OsUi.Ink;
+    Invalidate(true);
+  }
+  protected override void OnResize(EventArgs e) {
+    base.OnResize(e);
+    close.Bounds = new Rectangle(Width - 50, 16, 38, 38);
+    segRect = new Rectangle(16, 112, Width - 32, 40);
+    nameBox.Bounds = new Rectangle(30, 200 + (44 - nameBox.PreferredHeight) / 2, Width - 60, nameBox.PreferredHeight);
+    save.Bounds = new Rectangle(16, 262, Width - 32, 42);
+  }
+  protected override void OnMouseDown(MouseEventArgs e) {
+    base.OnMouseDown(e);
+    if (e.Y < 70 && e.Button == MouseButtons.Left) { OsNative.Drag(form); return; }
+    if (segRect.Contains(e.Location)) {
+      bool light = e.X > segRect.X + segRect.Width / 2;
+      if (light != OsUi.Light) form.App.SetTheme(light);
+    }
+  }
+  protected override void OnPaint(PaintEventArgs e) {
+    Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+    g.Clear(BackColor);
+    TextRenderer.DrawText(g, "Settings", fTitle, new Point(16, 18), OsUi.Ink);
+    using (Pen p = new Pen(OsUi.Line)) g.DrawLine(p, 0, 69, Width, 69);
+    TextRenderer.DrawText(g, "Theme", fLbl, new Point(16, 88), OsUi.Mute);
+    using (GraphicsPath p = OsUi.Round(segRect, 20)) using (SolidBrush b = new SolidBrush(OsUi.Box)) g.FillPath(b, p);
+    int half = segRect.Width / 2;
+    Rectangle left = new Rectangle(segRect.X + 3, segRect.Y + 3, half - 3, segRect.Height - 6);
+    Rectangle right = new Rectangle(segRect.X + half, segRect.Y + 3, half - 3, segRect.Height - 6);
+    Rectangle on = OsUi.Light ? right : left;
+    using (GraphicsPath p = OsUi.Round(on, 17)) using (SolidBrush b = new SolidBrush(OsUi.Blue)) g.FillPath(b, p);
+    TextRenderer.DrawText(g, "Night", fSeg, left, OsUi.Light ? OsUi.Ink : Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+    TextRenderer.DrawText(g, "Light", fSeg, right, OsUi.Light ? Color.White : OsUi.Ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+    TextRenderer.DrawText(g, "Your name", fLbl, new Point(16, 176), OsUi.Mute);
+    using (GraphicsPath p = OsUi.Round(new RectangleF(16, 200, Width - 32, 44), 10)) using (SolidBrush b = new SolidBrush(OsUi.Box)) g.FillPath(b, p);
+  }
+}
+
 public class PillForm : Form {
   OsApp app;
   Font fBig = new Font("Segoe UI Semibold", 13.5f);
   Font fMid = new Font("Segoe UI Semibold", 11f);
   Font fSmall = new Font("Segoe UI Semibold", 8.5f);
+  Font fAvatar = new Font("Segoe UI Semibold", 15f, FontStyle.Regular, GraphicsUnit.Pixel);
   public PillForm(OsApp a) {
     app = a;
     SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
@@ -446,31 +572,30 @@ public class PillForm : Form {
     Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
     int w = Width, h = Height;
     string k = app.Alert;
-    Color bg = k != null ? (app.BlinkOn ? OsUi.KindDark(k) : OsUi.KindColor(k)) : OsUi.Box;
+    Color bg = k != null ? (app.BlinkOn ? OsUi.KindDark(k) : OsUi.KindColor(k)) : OsUi.PillBg;
     g.Clear(bg);
     using (GraphicsPath p = new GraphicsPath()) {
       p.AddArc(0, 0, h - 1, h - 1, 90, 180); p.AddArc(w - h, 0, h - 1, h - 1, 270, 180); p.CloseFigure();
-      using (Pen pn = new Pen(OsUi.Line, 1.5f)) g.DrawPath(pn, p);
+      using (Pen pn = new Pen(k != null ? bg : OsUi.PillLine, 1.5f)) g.DrawPath(pn, p);
     }
-    Color fg = (k == "yellow" && !app.BlinkOn) ? OsUi.DarkText : OsUi.Ink;
+    Color fg = (k == "yellow" && !app.BlinkOn) ? OsUi.DarkText : (k != null ? Color.White : OsUi.PillInk);
     float cy = h / 2f;
     using (Pen pen = new Pen(fg, 2f)) {
       pen.LineJoin = LineJoin.Round;
       g.DrawPolygon(pen, new PointF[] { new PointF(24, cy - 1), new PointF(42, cy - 9), new PointF(34, cy + 9), new PointF(31.5f, cy + 1.5f) });
     }
-    string title = k != null ? OsUi.KindLabel(k) + (app.AlertFrom != "" ? " - " + app.AlertFrom : "") : "Messages";
+    string title;
+    if (k == "msg") title = app.AlertFrom + ": " + app.AlertText.Replace("\r", " ").Replace("\n", " ");
+    else if (k != null) title = OsUi.KindLabel(k) + (app.AlertFrom != "" ? " - " + app.AlertFrom : "");
+    else title = "Messages";
     TextRenderer.DrawText(g, title, k != null ? fMid : fBig, new Rectangle(56, 0, w - 56 - 64, h), fg, bg, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
     int ax = w - 52, ay = (h - 34) / 2;
-    if (app.Other != "") {
-      using (SolidBrush b = new SolidBrush(OsUi.AvatarColor(app.Other))) g.FillEllipse(b, ax, ay, 34, 34);
-      using (Pen pn = new Pen(bg, 2f)) g.DrawEllipse(pn, ax, ay, 34, 34);
-      TextRenderer.DrawText(g, OsUi.Initial(app.Other), fMid, new Rectangle(ax, ay, 34, 34), Color.White, OsUi.AvatarColor(app.Other), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-    }
+    if (app.Other != "") OsUi.DrawAvatar(g, app.Other, new RectangleF(ax, ay, 34, 34), bg, fAvatar);
     if (app.Unread > 0 && k == null) {
       int bx = ax - 30, by = (h - 22) / 2;
       using (SolidBrush b = new SolidBrush(OsUi.Blue)) g.FillEllipse(b, bx, by, 22, 22);
       string n = app.Unread > 9 ? "9+" : app.Unread.ToString();
-      TextRenderer.DrawText(g, n, fSmall, new Rectangle(bx, by, 22, 22), Color.White, OsUi.Blue, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+      OsUi.DrawCentered(g, n, fSmall, new RectangleF(bx, by, 22, 22), Color.White);
     }
   }
 }
@@ -487,6 +612,8 @@ public class OsApp : ApplicationContext {
   Dictionary<string, bool> conn = new Dictionary<string, bool>();
   public string Alert;
   public string AlertFrom = "";
+  public string AlertText = "";
+  string cfgDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OfficeSignal");
   public bool BlinkOn;
   public int Unread;
   public string Other = "";
@@ -497,6 +624,8 @@ public class OsApp : ApplicationContext {
 
   public OsApp(string name, string cid, string topic) {
     Name = name; Cid = cid; Topic = topic;
+    try { OsNative.SetCurrentProcessExplicitAppUserModelID("RoboTalent.OfficeSignal"); } catch { }
+    try { OsUi.SetTheme(File.Exists(Path.Combine(cfgDir, "theme.txt")) && File.ReadAllText(Path.Combine(cfgDir, "theme.txt")).Trim() == "light"); } catch { }
     AppIcon = OsUi.MakeIcon(64);
     Chat = new ChatForm(this);
     IntPtr h1 = Chat.Handle;
@@ -548,9 +677,9 @@ public class OsApp : ApplicationContext {
     Pill.Invalidate();
     Watch();
   }
-  void ClearAlert() { Alert = null; AlertFrom = ""; blink.Stop(); Pill.Invalidate(); }
-  void StartAlert(string kind, string from) {
-    Alert = kind; AlertFrom = from; BlinkOn = false;
+  void ClearAlert() { Alert = null; AlertFrom = ""; AlertText = ""; blink.Stop(); Pill.Invalidate(); }
+  void StartAlert(string kind, string from, string text) {
+    Alert = kind; AlertFrom = from; AlertText = text ?? ""; BlinkOn = false;
     if (!Pill.Visible) Pill.Show();
     Pill.TopMost = true; Pill.Invalidate();
     blink.Start();
@@ -561,9 +690,21 @@ public class OsApp : ApplicationContext {
     if (wantPill && !Pill.Visible) { Pill.Show(); Pill.TopMost = true; }
     else if (!wantPill && Pill.Visible) Pill.Hide();
     if (ChatActive()) {
+      if (Alert == "msg") ClearAlert();
       if (Unread != 0) { Unread = 0; Pill.Invalidate(); }
       if (lastOtherTime > seenSent) { seenSent = lastOtherTime; Send("", "seen"); }
     }
+  }
+  public void SetTheme(bool light) {
+    OsUi.SetTheme(light);
+    try { Directory.CreateDirectory(cfgDir); File.WriteAllText(Path.Combine(cfgDir, "theme.txt"), light ? "light" : "dark"); } catch { }
+    Chat.ApplyTheme();
+  }
+  public void SetName(string n) {
+    n = (n ?? "").Trim();
+    if (n == "" || n == Name) return;
+    Name = n;
+    try { Directory.CreateDirectory(cfgDir); File.WriteAllLines(Path.Combine(cfgDir, "me.txt"), new string[] { Name, Cid }, new UTF8Encoding(false)); } catch { }
   }
   public void Shutdown() {
     running = false;
@@ -662,14 +803,14 @@ public class OsApp : ApplicationContext {
       return;
     }
     if (!m.Mine) {
-      Other = m.Name;
+      Other = m.Name; Chat.View.Peer = m.Name;
       if (m.Time > lastOtherTime) lastOtherTime = m.Time;
       Chat.Head.Invalidate();
     }
     Chat.View.Add(m);
     if (live && !m.Mine) {
-      if (OsUi.IsSignal(m.Type)) StartAlert(m.Type, m.Name);
-      else if (!ChatActive()) Unread++;
+      if (OsUi.IsSignal(m.Type)) StartAlert(m.Type, m.Name, m.Text);
+      else if (!ChatActive()) { Unread++; if (Alert == null || Alert == "msg") StartAlert("msg", m.Name, m.Text); }
       Pill.Invalidate();
     }
   }
