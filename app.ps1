@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.7'
+$global:appVersion = '2026-11-19.8'
 
 # ---- only one copy running: if already running, ask it to show the window ----
 $created = $false
@@ -1005,16 +1005,31 @@ public class OsApp : ApplicationContext {
       Chat.View.ScrollToEnd();
     }
     foreach (string s in servers) {
-      string url = s + "/" + Topic;
+      string postUrl = s + "/" + Topic;
       ThreadPool.QueueUserWorkItem(delegate {
-        try { using (WebClient wc = new WebClient()) { wc.Encoding = Encoding.UTF8; wc.UploadString(url, "POST", body); } } catch { }
+        try { using (WebClient wc = new WebClient()) { wc.Encoding = Encoding.UTF8; wc.UploadString(postUrl, "POST", body); } } catch { }
       });
     }
   }
 }
 '@
-try { Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms, System.Drawing, System.Web.Extensions -IgnoreWarnings -ErrorAction Stop }
-catch { $det = (@($Error) | Select-Object -First 6 | ForEach-Object { $_.ToString() }) -join "`r`n"; throw "Build failed:`r`n$det" }
+$goodFile = Join-Path $global:dir 'app.good.ps1'
+$built = $false
+try { Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms, System.Drawing, System.Web.Extensions -IgnoreWarnings -ErrorAction Stop; $built = $true }
+catch {
+  $det = (@($Error) | Select-Object -First 6 | ForEach-Object { $_.ToString() }) -join "`r`n"
+  if (-not $global:fallbackTried -and (Test-Path $goodFile)) {
+    # this version does not work: run the last version that worked instead
+    $global:fallbackTried = $true
+    try { $global:mutex.ReleaseMutex() } catch {}
+    iex ([IO.File]::ReadAllText($goodFile))
+    return
+  }
+  throw "Build failed:`r`n$det"
+}
+if ($built -and $global:appCache -and (Test-Path $global:appCache) -and -not $global:fallbackTried) {
+  try { Copy-Item -LiteralPath $global:appCache -Destination $goodFile -Force } catch {}
+}
 
 # ---- Os icon file + desktop shortcut ----
 $global:icoPath = Join-Path $global:dir 'OfficeSignal.ico'
