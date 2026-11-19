@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.5'
+$global:appVersion = '2026-11-19.6'
 
 # ---- only one copy running: if already running, ask it to show the window ----
 $created = $false
@@ -47,6 +47,9 @@ public class OsMsg {
   public string Key = "", Name = "", C = "", Text = "", Type = "";
   public long Time, SeenT;
   public bool Mine;
+  public string Url = "";
+  public Image Img;
+  public bool ImgFailed, ImgLoading;
 }
 
 public static class OsNative {
@@ -209,6 +212,10 @@ public class IconBtn : Control {
         g.DrawLines(pen, new PointF[] { new PointF(cx - 1, cy + 7), new PointF(cx - 7, cy + 7), new PointF(cx - 7, cy + 1) });
       } else if (Kind == "min") {
         g.DrawLine(pen, cx - 7, cy + 1, cx + 7, cy + 1);
+      } else if (Kind == "screen") {
+        g.DrawRectangle(pen, cx - 8, cy - 7, 16, 11);
+        g.DrawLine(pen, cx - 4, cy + 8, cx + 4, cy + 8);
+        g.DrawLine(pen, cx, cy + 4, cx, cy + 8);
       } else if (Kind == "joke") {
         using (Pen jp = new Pen(OsUi.Yellow, 1.8f)) {
           g.DrawEllipse(jp, cx - 8, cy - 8, 16, 16);
@@ -264,7 +271,29 @@ public class ChatView : Control {
     int w = Math.Min(180, MaxBubble());
     return new Size(w, w * im.Height / im.Width);
   }
+  List<KeyValuePair<Rectangle, OsMsg>> shotRects = new List<KeyValuePair<Rectangle, OsMsg>>();
+  Size ShotSize() { int w = Math.Min(240, MaxBubble()); return new Size(w, w * 9 / 16); }
+  protected override void OnMouseMove(MouseEventArgs e) {
+    base.OnMouseMove(e);
+    bool over = false;
+    foreach (KeyValuePair<Rectangle, OsMsg> kv in shotRects) if (kv.Key.Contains(e.Location)) over = true;
+    Cursor = over ? Cursors.Hand : Cursors.Default;
+  }
+  protected override void OnMouseClick(MouseEventArgs e) {
+    base.OnMouseClick(e);
+    foreach (KeyValuePair<Rectangle, OsMsg> kv in shotRects) {
+      if (kv.Key.Contains(e.Location) && kv.Value.Img != null) {
+        try {
+          string p = Path.Combine(Path.GetTempPath(), "OfficeSignal-" + Math.Abs(kv.Value.Key.GetHashCode()).ToString() + ".jpg");
+          kv.Value.Img.Save(p, System.Drawing.Imaging.ImageFormat.Jpeg);
+          System.Diagnostics.Process.Start(p);
+        } catch { }
+        return;
+      }
+    }
+  }
   int ItemHeight(OsMsg m, bool vu) {
+    if (m.Type == "shot") return ShotSize().Height + 4 + 16 + 8 + (vu ? 18 : 0);
     int h = OsUi.IsSignal(m.Type) ? 30 + 4 + 16 + 12 : BubbleSize(m).Height + 4 + 16 + 8;
     if (m.Type == "joke") h += JokeSize().Height + 6;
     if (vu) h += 18;
@@ -297,13 +326,33 @@ public class ChatView : Control {
       return;
     }
     int lastSeenMine = LastSeenIndex();
+    shotRects.Clear();
     int y = 14 - scroll;
     for (int i = 0; i < Items.Count; i++) {
       OsMsg m = Items[i];
       int h = ItemHeight(m, i == lastSeenMine);
       if (y + h < 0 || y > Height) { y += h; continue; }
       string meta = (m.Mine ? "" : m.Name + " - ") + OsUi.Clock(m.Time);
-      if (OsUi.IsSignal(m.Type)) {
+      if (m.Type == "shot") {
+        Size ss = ShotSize();
+        int sx = m.Mine ? Width - 14 - ss.Width : 14;
+        Rectangle sr = new Rectangle(sx, y, ss.Width, ss.Height);
+        using (GraphicsPath p = OsUi.Round(sr, 14)) {
+          using (SolidBrush b = new SolidBrush(OsUi.Bubble)) g.FillPath(b, p);
+          if (m.Img != null) {
+            Region old = g.Clip; g.SetClip(p);
+            float sc = Math.Min(ss.Width / (float)m.Img.Width, ss.Height / (float)m.Img.Height);
+            int iw = (int)(m.Img.Width * sc), ih = (int)(m.Img.Height * sc);
+            g.DrawImage(m.Img, new Rectangle(sx + (ss.Width - iw) / 2, y + (ss.Height - ih) / 2, iw, ih));
+            g.Clip = old;
+          } else {
+            string st = m.ImgFailed ? "Screenshot expired" : "Loading screenshot...";
+            TextRenderer.DrawText(g, st, fMeta, sr, OsUi.Mute, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+          }
+        }
+        shotRects.Add(new KeyValuePair<Rectangle, OsMsg>(sr, m));
+        TextRenderer.DrawText(g, meta + "  -  Screenshot", fMeta, new Rectangle(m.Mine ? 0 : sx + 6, y + ss.Height + 4, m.Mine ? Width - 20 : Width, 16), OsUi.Mute, m.Mine ? TextFormatFlags.Right : TextFormatFlags.Left);
+      } else if (OsUi.IsSignal(m.Type)) {
         string t = ChipText(m);
         Size ts = TextRenderer.MeasureText(t, fChip);
         int w = Math.Min(Width - 40, ts.Width + 32);
@@ -351,13 +400,14 @@ public class ChatView : Control {
 }
 
 public class ConfirmForm : Form {
-  public ConfirmForm() {
+  public ConfirmForm() : this("Send emergency?", "Your colleague's Messages bar will blink red.", "Send emergency", OsUi.Red) { }
+  public ConfirmForm(string title, string sub, string yesText, Color yesColor) {
     FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.CenterParent; ShowInTaskbar = false;
     BackColor = Color.Black; Size = new Size(320, 190); TopMost = true;
     Region = new Region(OsUi.Round(new RectangleF(0, 0, 320, 190), 16));
-    Label t = new Label(); t.Text = "Send emergency?"; t.ForeColor = OsUi.Ink; t.Font = new Font("Segoe UI Semibold", 13f); t.AutoSize = false; t.TextAlign = ContentAlignment.MiddleCenter; t.Bounds = new Rectangle(0, 18, 320, 30);
-    Label s = new Label(); s.Text = "Your colleague's Messages bar will blink red."; s.ForeColor = OsUi.Mute; s.Font = new Font("Segoe UI", 9.5f); s.AutoSize = false; s.TextAlign = ContentAlignment.MiddleCenter; s.Bounds = new Rectangle(10, 50, 300, 22);
-    RoundBtn yes = new RoundBtn("Send emergency", OsUi.Red, Color.White); yes.BackColor = Color.Black; yes.Bounds = new Rectangle(24, 84, 272, 40);
+    Label t = new Label(); t.Text = title; t.ForeColor = OsUi.Ink; t.Font = new Font("Segoe UI Semibold", 13f); t.AutoSize = false; t.TextAlign = ContentAlignment.MiddleCenter; t.Bounds = new Rectangle(0, 18, 320, 30);
+    Label s = new Label(); s.Text = sub; s.ForeColor = OsUi.Mute; s.Font = new Font("Segoe UI", 9.5f); s.AutoSize = false; s.TextAlign = ContentAlignment.MiddleCenter; s.Bounds = new Rectangle(10, 50, 300, 22);
+    RoundBtn yes = new RoundBtn(yesText, yesColor, Color.White); yes.BackColor = Color.Black; yes.Bounds = new Rectangle(24, 84, 272, 40);
     RoundBtn no = new RoundBtn("Cancel", Color.FromArgb(32, 35, 39), OsUi.Ink); no.BackColor = Color.Black; no.Bounds = new Rectangle(24, 132, 272, 40);
     yes.Click += delegate { DialogResult = DialogResult.Yes; Close(); };
     no.Click += delegate { DialogResult = DialogResult.No; Close(); };
@@ -404,7 +454,7 @@ public class ChatForm : Form {
   Panel sig, bottom;
   RoundBtn bRed, bYel, bGrn;
   TextBox input;
-  IconBtn sendBtn, jokeBtn;
+  IconBtn sendBtn, jokeBtn, shotBtn;
   public bool Quitting;
   bool wide;
   SettingsView settings;
@@ -435,7 +485,9 @@ public class ChatForm : Form {
     input.MaxLength = 2000;
     sendBtn = new IconBtn("send"); sendBtn.BackColor = OsUi.Box;
     jokeBtn = new IconBtn("joke"); jokeBtn.BackColor = OsUi.Box;
-    bottom.Controls.Add(input); bottom.Controls.Add(sendBtn); bottom.Controls.Add(jokeBtn);
+    shotBtn = new IconBtn("screen"); shotBtn.BackColor = OsUi.Box;
+    bottom.Controls.Add(input); bottom.Controls.Add(sendBtn); bottom.Controls.Add(jokeBtn); bottom.Controls.Add(shotBtn);
+    shotBtn.Click += delegate { SendScreenshot(); };
     jokeBtn.Click += delegate { App.Send(OsUi.JokeText, "joke"); FocusInput(); };
     bottom.Resize += delegate { LayoutBottom(); };
     Controls.Add(Head); Controls.Add(sig); Controls.Add(View); Controls.Add(bottom);
@@ -483,7 +535,7 @@ public class ChatForm : Form {
   public void ApplyTheme() {
     BackColor = OsUi.Line;
     foreach (Control c in new Control[] { Head, sig, View, bottom, Head.Gear, Head.Min, Head.Expand, Head.Close, bRed, bYel, bGrn }) { c.BackColor = OsUi.Bg; c.Invalidate(); }
-    input.BackColor = OsUi.Box; input.ForeColor = OsUi.Ink; sendBtn.BackColor = OsUi.Box; sendBtn.Invalidate(); jokeBtn.BackColor = OsUi.Box; jokeBtn.Invalidate();
+    input.BackColor = OsUi.Box; input.ForeColor = OsUi.Ink; sendBtn.BackColor = OsUi.Box; sendBtn.Invalidate(); jokeBtn.BackColor = OsUi.Box; jokeBtn.Invalidate(); shotBtn.BackColor = OsUi.Box; shotBtn.Invalidate();
     settings.ApplyTheme();
     Invalidate(true);
   }
@@ -495,7 +547,8 @@ public class ChatForm : Form {
   }
   void LayoutBottom() {
     int boxW = bottom.Width - 24;
-    input.Bounds = new Rectangle(28, 12 + (48 - input.PreferredHeight) / 2, boxW - 16 - 84, input.PreferredHeight);
+    input.Bounds = new Rectangle(28, 12 + (48 - input.PreferredHeight) / 2, boxW - 16 - 124, input.PreferredHeight);
+    shotBtn.Bounds = new Rectangle(12 + boxW - 124, 18, 36, 36);
     jokeBtn.Bounds = new Rectangle(12 + boxW - 84, 18, 36, 36);
     sendBtn.Bounds = new Rectangle(12 + boxW - 44, 18, 36, 36);
   }
@@ -504,6 +557,22 @@ public class ChatForm : Form {
     Location = new Point(wa.Right - Width - 16, wa.Bottom - Height - 16);
   }
   public void FocusInput() { try { input.Focus(); } catch { } }
+  void SendScreenshot() {
+    using (ConfirmForm c = new ConfirmForm("Send a screenshot?", "A picture of your whole screen goes to your colleague.", "Send screenshot", OsUi.Blue)) {
+      if (c.ShowDialog(this) != DialogResult.Yes) return;
+    }
+    bool pillWas = App.Pill.Visible;
+    Hide(); App.Pill.Hide();
+    Application.DoEvents(); Thread.Sleep(350);
+    Bitmap shot = null;
+    try {
+      Rectangle b = Screen.PrimaryScreen.Bounds;
+      shot = new Bitmap(b.Width, b.Height);
+      using (Graphics g = Graphics.FromImage(shot)) g.CopyFromScreen(b.Location, Point.Empty, b.Size);
+    } catch { }
+    Show(); Activate();
+    if (shot != null) App.SendShot(shot);
+  }
   void SendInput() {
     string t = input.Text.Trim();
     if (t == "") return;
@@ -773,7 +842,7 @@ public class OsApp : ApplicationContext {
       m.Name = S(inner, "name").Trim(); if (m.Name == "") return null;
       m.C = S(inner, "c"); m.Text = S(inner, "text"); m.Type = S(inner, "type");
       m.Key = S(inner, "k"); if (m.Key == "") m.Key = id;
-      m.Time = L(ev, "time"); m.SeenT = L(inner, "t");
+      m.Time = L(ev, "time"); m.SeenT = L(inner, "t"); m.Url = S(inner, "url");
       m.Mine = m.C != "" ? m.C == Cid : m.Name == Name;
       return m;
     } catch { return null; }
@@ -843,24 +912,82 @@ public class OsApp : ApplicationContext {
       if (m.Time > lastOtherTime) lastOtherTime = m.Time;
       Chat.Head.Invalidate();
     }
+    if (m.Type == "shot" && m.Img == null && m.Url != "") LoadShot(m);
     Chat.View.Add(m);
-    if (live && !m.Mine) {
+    if (live && !m.Mine && m.Type == "shot") {
+      if (!ChatActive()) { Unread++; if (Alert == null || Alert == "msg") StartAlert("msg", m.Name, "sent a screenshot"); }
+      Pill.Invalidate();
+    } else if (live && !m.Mine) {
       if (OsUi.IsSignal(m.Type)) StartAlert(m.Type, m.Name, m.Text);
       else if (!ChatActive()) { Unread++; if (Alert == null || Alert == "msg") StartAlert("msg", m.Name, m.Text); }
       Pill.Invalidate();
     }
   }
 
-  public void Send(string text, string type) {
+  void LoadShot(OsMsg m) {
+    if (m.ImgLoading) return;
+    m.ImgLoading = true;
+    string url = m.Url;
+    ThreadPool.QueueUserWorkItem(delegate {
+      Image img = null;
+      try { using (WebClient wc = new WebClient()) { byte[] data = wc.DownloadData(url); img = Image.FromStream(new MemoryStream(data)); } } catch { }
+      Ui(delegate { if (img != null) m.Img = img; else m.ImgFailed = true; Chat.View.Invalidate(); });
+    });
+  }
+  public void SendShot(Bitmap shot) {
+    Bitmap small = shot;
+    if (shot.Width > 1600) {
+      int h = shot.Height * 1600 / shot.Width;
+      small = new Bitmap(1600, h);
+      using (Graphics g = Graphics.FromImage(small)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(shot, 0, 0, 1600, h); }
+    }
+    byte[] jpg;
+    using (MemoryStream ms = new MemoryStream()) {
+      System.Drawing.Imaging.ImageCodecInfo codec = null;
+      foreach (System.Drawing.Imaging.ImageCodecInfo ci in System.Drawing.Imaging.ImageCodecInfo.GetImageEncoders()) if (ci.MimeType == "image/jpeg") codec = ci;
+      System.Drawing.Imaging.EncoderParameters ep = new System.Drawing.Imaging.EncoderParameters(1);
+      ep.Param[0] = new System.Drawing.Imaging.EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 72L);
+      if (codec != null) small.Save(ms, codec, ep); else small.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
+      jpg = ms.ToArray();
+    }
+    Image preview = new Bitmap(small);
+    ThreadPool.QueueUserWorkItem(delegate {
+      string url = null;
+      foreach (string s in servers) {
+        try {
+          HttpWebRequest req = (HttpWebRequest)WebRequest.Create(s + "/" + Topic + "-files");
+          req.Method = "PUT"; req.Timeout = 60000; req.ReadWriteTimeout = 60000;
+          req.Headers["Filename"] = "screen.jpg";
+          req.ContentLength = jpg.Length;
+          using (Stream rs = req.GetRequestStream()) rs.Write(jpg, 0, jpg.Length);
+          using (WebResponse resp = req.GetResponse()) using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8)) {
+            Dictionary<string, object> d = new JavaScriptSerializer().DeserializeObject(sr.ReadToEnd()) as Dictionary<string, object>;
+            object att;
+            if (d != null && d.TryGetValue("attachment", out att)) { url = S(att as Dictionary<string, object>, "url"); }
+          }
+          if (!string.IsNullOrEmpty(url)) break;
+        } catch { }
+      }
+      string u2 = url;
+      Ui(delegate {
+        if (string.IsNullOrEmpty(u2)) { MessageBox.Show(Chat, "The screenshot could not be sent. Check the internet and try again.", "Office Signal"); return; }
+        Send("", "shot", u2, preview);
+      });
+    });
+  }
+  public void Send(string text, string type) { Send(text, type, null, null); }
+  public void Send(string text, string type, string url, Image img) {
     Dictionary<string, object> d = new Dictionary<string, object>();
     string key = Cid + "-" + DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture) + "-" + rnd.Next(100000).ToString(CultureInfo.InvariantCulture);
     d["name"] = Name; d["c"] = Cid; d["k"] = key; d["text"] = text ?? "";
     if (type != null) d["type"] = type;
     if (type == "seen") d["t"] = seenSent;
+    if (url != null) d["url"] = url;
     string body = new JavaScriptSerializer().Serialize(d);
     if (type != "seen") {
       OsMsg m = new OsMsg();
       m.Name = Name; m.C = Cid; m.Text = text ?? ""; m.Type = type ?? ""; m.Key = key; m.Time = OsUi.Now(); m.Mine = true;
+      m.Url = url ?? ""; m.Img = img;
       Deliver(m, false);
       Chat.View.ScrollToEnd();
     }
