@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.15'
+$global:appVersion = '2026-11-19.16'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -838,7 +838,7 @@ public class PillForm : Form {
     SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
     FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; StartPosition = FormStartPosition.Manual;
     BackColor = Color.Black; Cursor = Cursors.Hand; Text = "Office Signal bar";
-    int w = 250, h = 58;
+    int w = 282, h = 58;
     tip = new ToolTip();
     Rectangle wa = Screen.PrimaryScreen.WorkingArea;
     Bounds = new Rectangle(wa.Right - w - 16, wa.Bottom - h - 16, w, h);
@@ -854,6 +854,10 @@ public class PillForm : Form {
   }
   ToolTip tip;
   string lastTip = "";
+  string[] miniKinds = { "red", "yellow", "green" };
+  RectangleF[] miniRects = new RectangleF[3];
+  string sentKind; DateTime sentAt;
+  int MiniHit(Point p) { for (int i = 0; i < 3; i++) { RectangleF r = miniRects[i]; r.Inflate(4, 2); if (r.Contains(p)) return i; } return -1; }
   Point downPt, startLoc;
   bool pressing, moved;
   static string PosFile() { return Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OfficeSignal"), "pill.txt"); }
@@ -874,17 +878,33 @@ public class PillForm : Form {
   }
   protected override void OnMouseMove(MouseEventArgs e) {
     base.OnMouseMove(e);
+    CheckHover(e.Location);
     if (!pressing) return;
     Point c = Cursor.Position;
     int dx = c.X - downPt.X, dy = c.Y - downPt.Y;
     if (!moved && Math.Abs(dx) + Math.Abs(dy) > 5) { moved = true; Cursor = Cursors.SizeAll; }
     if (moved) Location = new Point(startLoc.X + dx, startLoc.Y + dy);
   }
+  int lastHov = -2;
+  protected override void OnMouseHover(EventArgs e) { base.OnMouseHover(e); Invalidate(); }
+  void CheckHover(Point p) { int hv = MiniHit(p); if (hv != lastHov) { lastHov = hv; Invalidate(); } }
   protected override void OnMouseUp(MouseEventArgs e) {
     base.OnMouseUp(e);
     if (!pressing) return;
     pressing = false;
     Cursor = Cursors.Hand;
+    if (!moved && e.Button == MouseButtons.Left) {
+      int mi = MiniHit(e.Location);
+      if (mi >= 0) {
+        string kd = miniKinds[mi];
+        app.Send("", kd);
+        sentKind = kd; sentAt = DateTime.Now; Invalidate();
+        System.Windows.Forms.Timer ft = new System.Windows.Forms.Timer(); ft.Interval = 900;
+        ft.Tick += delegate { ft.Stop(); ft.Dispose(); sentKind = null; Invalidate(); };
+        ft.Start();
+        return;
+      }
+    }
     if (moved) {
       Rectangle wa = Screen.FromPoint(Cursor.Position).WorkingArea;
       int x = Math.Max(wa.Left, Math.Min(Left, wa.Right - Width));
@@ -925,7 +945,18 @@ public class PillForm : Form {
     }
     int ax = w - 46, ay = (h - 32) / 2;
     if (app.Other != "") OsUi.DrawAvatar(g, app.Other, new RectangleF(ax, ay, 32, 32), bg, fAvatar);
-    string t = app.TipText();
+    float mx = w - 70, msz = 13;
+    using (Pen sep = new Pen(Color.FromArgb(58, 63, 68), 1f)) g.DrawLine(sep, mx - 10, 12, mx - 10, h - 12);
+    for (int i = 0; i < 3; i++) {
+      RectangleF r = new RectangleF(mx, cy - 21.5f + i * 15, msz, msz);
+      miniRects[i] = r;
+      Color mc = OsUi.KindColor(miniKinds[i]);
+      if (sentKind == miniKinds[i]) { using (SolidBrush gl = new SolidBrush(Color.FromArgb(110, mc))) g.FillEllipse(gl, r.X - 4, r.Y - 4, r.Width + 8, r.Height + 8); }
+      using (SolidBrush b = new SolidBrush(mc)) g.FillEllipse(b, r);
+    }
+    Point mp = PointToClient(Cursor.Position);
+    int hov = ClientRectangle.Contains(mp) ? MiniHit(mp) : -1;
+    string t = hov >= 0 ? "Send: " + OsUi.KindLabel(miniKinds[hov]) : app.TipText();
     if (t != lastTip) { lastTip = t; tip.SetToolTip(this, t); }
   }
 }
