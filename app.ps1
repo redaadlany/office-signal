@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.14'
+$global:appVersion = '2026-11-19.15'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -943,6 +943,8 @@ public class OsApp : ApplicationContext {
   public string Alert;
   public HashSet<string> Lit = new HashSet<string>();
   Dictionary<string, string> litText = new Dictionary<string, string>();
+  Dictionary<string, DateTime> litAt = new Dictionary<string, DateTime>();
+  const int LitSeconds = 10;
   public string TipText() {
     if (Lit.Count == 0) return "Messages";
     List<string> parts = new List<string>();
@@ -979,7 +981,13 @@ public class OsApp : ApplicationContext {
     tray.DoubleClick += delegate { ShowChat(); };
     watch = new System.Windows.Forms.Timer(); watch.Interval = 500; watch.Tick += delegate { Watch(); }; watch.Start();
     blink = new System.Windows.Forms.Timer(); blink.Interval = 450;
-    blink.Tick += delegate { BlinkOn = !BlinkOn; Pill.TopMost = true; Pill.Invalidate(); };
+    blink.Tick += delegate {
+      BlinkOn = !BlinkOn;
+      List<string> old = new List<string>();
+      foreach (KeyValuePair<string, DateTime> kv in litAt) if ((DateTime.Now - kv.Value).TotalSeconds > LitSeconds) old.Add(kv.Key);
+      foreach (string k in old) ClearKind(k);
+      Pill.TopMost = true; Pill.Invalidate();
+    };
     bool createdNew;
     showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\OfficeSignalShow", out createdNew);
     Thread waiter = new Thread(delegate() {
@@ -1016,15 +1024,17 @@ public class OsApp : ApplicationContext {
     Pill.Invalidate();
     Watch();
   }
-  void ClearAlert() { Alert = null; AlertFrom = ""; AlertText = ""; Lit.Clear(); litText.Clear(); blink.Stop(); Pill.Invalidate(); }
+  void ClearAlert() { Alert = null; AlertFrom = ""; AlertText = ""; Lit.Clear(); litText.Clear(); litAt.Clear(); blink.Stop(); Pill.Invalidate(); }
   void ClearKind(string k) {
-    Lit.Remove(k); litText.Remove(k);
+    Lit.Remove(k); litText.Remove(k); litAt.Remove(k);
     if (Lit.Count == 0) { Alert = null; blink.Stop(); }
     Pill.Invalidate();
   }
   void StartAlert(string kind, string from, string text) {
     Alert = kind; AlertFrom = from; AlertText = text ?? ""; BlinkOn = false;
+    if (OsUi.IsSignal(kind)) { foreach (string o in new string[] { "red", "yellow", "green" }) { if (o != kind) { Lit.Remove(o); litText.Remove(o); litAt.Remove(o); } } }
     Lit.Add(kind);
+    litAt[kind] = DateTime.Now;
     string desc;
     if (kind == "msg") desc = from + ": " + (text ?? "");
     else if (kind == "live") desc = from + " is sharing the screen";
