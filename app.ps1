@@ -3,15 +3,28 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.6'
+$global:appVersion = '2026-11-19.7'
 
 # ---- only one copy running: if already running, ask it to show the window ----
 $created = $false
 $global:mutex = New-Object System.Threading.Mutex($true, 'Local\OfficeSignalApp', [ref]$created)
+$verFile = Join-Path (Join-Path $env:APPDATA 'OfficeSignal') 'running.txt'
 if (-not $created) {
-  try { ([System.Threading.EventWaitHandle]::OpenExisting('Local\OfficeSignalShow')).Set() | Out-Null } catch {}
-  return
+  $runningVer = ''; try { $runningVer = ([IO.File]::ReadAllText($verFile)).Trim() } catch {}
+  if ($runningVer -eq $global:appVersion) {
+    try { ([System.Threading.EventWaitHandle]::OpenExisting('Local\OfficeSignalShow')).Set() | Out-Null } catch {}
+    return
+  }
+  # a newer version was just downloaded: ask the old one to close, then take over
+  try { ([System.Threading.EventWaitHandle]::OpenExisting('Local\OfficeSignalQuit')).Set() | Out-Null } catch {}
+  $got = $false
+  try { $got = $global:mutex.WaitOne(8000) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+  if (-not $got) {
+    try { ([System.Threading.EventWaitHandle]::OpenExisting('Local\OfficeSignalShow')).Set() | Out-Null } catch {}
+    return
+  }
 }
+try { [IO.Directory]::CreateDirectory((Split-Path $verFile)) | Out-Null; [IO.File]::WriteAllText($verFile, $global:appVersion) } catch {}
 
 # ---- who am I (asked once, saved) ----
 $global:dir = Join-Path $env:APPDATA 'OfficeSignal'
@@ -1038,7 +1051,7 @@ function Restart-App {
   [Environment]::Exit(0)
 }
 $global:updTimer = New-Object Windows.Forms.Timer
-$global:updTimer.Interval = 20 * 60 * 1000
+$global:updTimer.Interval = 5 * 60 * 1000
 $global:updTimer.Add_Tick({
   try {
     $wc = New-Object Net.WebClient; $wc.Encoding = [Text.Encoding]::UTF8
@@ -1053,6 +1066,19 @@ $global:updTimer.Add_Tick({
   } catch {}
 })
 if ($global:appUrl) { $global:updTimer.Start() }
+
+# another copy with a newer version asks this one to close
+$global:quitEvent = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, 'Local\OfficeSignalQuit')
+$global:quitTimer = New-Object Windows.Forms.Timer
+$global:quitTimer.Interval = 1000
+$global:quitTimer.Add_Tick({
+  if ($global:quitEvent.WaitOne(0)) {
+    try { $global:app.Shutdown() } catch {}
+    try { $global:mutex.ReleaseMutex() } catch {}
+    [Environment]::Exit(0)
+  }
+})
+$global:quitTimer.Start()
 
 [Windows.Forms.Application]::Run($global:app)
 }
