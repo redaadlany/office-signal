@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.13'
+$global:appVersion = '2026-11-19.14'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -838,7 +838,8 @@ public class PillForm : Form {
     SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
     FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; StartPosition = FormStartPosition.Manual;
     BackColor = Color.Black; Cursor = Cursors.Hand; Text = "Office Signal bar";
-    int w = 320, h = 62;
+    int w = 250, h = 58;
+    tip = new ToolTip();
     Rectangle wa = Screen.PrimaryScreen.WorkingArea;
     Bounds = new Rectangle(wa.Right - w - 16, wa.Bottom - h - 16, w, h);
     using (GraphicsPath p = new GraphicsPath()) {
@@ -851,6 +852,8 @@ public class PillForm : Form {
   protected override CreateParams CreateParams {
     get { CreateParams cp = base.CreateParams; cp.ExStyle |= 0x00000080 | 0x00000008; return cp; }
   }
+  ToolTip tip;
+  string lastTip = "";
   Point downPt, startLoc;
   bool pressing, moved;
   static string PosFile() { return Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OfficeSignal"), "pill.txt"); }
@@ -893,35 +896,37 @@ public class PillForm : Form {
     }
   }
   protected override void OnPaint(PaintEventArgs e) {
-    Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+    Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
     int w = Width, h = Height;
-    string k = app.Alert;
-    Color bg = k != null ? (app.BlinkOn ? OsUi.KindDark(k) : OsUi.KindColor(k)) : OsUi.PillBg;
+    Color bg = OsUi.PillBg;
     g.Clear(bg);
     using (GraphicsPath p = new GraphicsPath()) {
       p.AddArc(0, 0, h - 1, h - 1, 90, 180); p.AddArc(w - h, 0, h - 1, h - 1, 270, 180); p.CloseFigure();
-      using (Pen pn = new Pen(k != null ? bg : OsUi.PillLine, 1.5f)) g.DrawPath(pn, p);
+      using (Pen pn = new Pen(OsUi.PillLine, 1.5f)) g.DrawPath(pn, p);
     }
-    Color fg = (k == "yellow" && !app.BlinkOn) ? OsUi.DarkText : (k != null ? Color.White : OsUi.PillInk);
     float cy = h / 2f;
-    using (Pen pen = new Pen(fg, 2f)) {
+    using (Pen pen = new Pen(OsUi.PillInk, 2f)) {
       pen.LineJoin = LineJoin.Round;
-      g.DrawPolygon(pen, new PointF[] { new PointF(24, cy - 1), new PointF(42, cy - 9), new PointF(34, cy + 9), new PointF(31.5f, cy + 1.5f) });
+      g.DrawPolygon(pen, new PointF[] { new PointF(20, cy - 1), new PointF(38, cy - 9), new PointF(30, cy + 9), new PointF(27.5f, cy + 1.5f) });
     }
-    string title;
-    if (k == "msg") title = app.AlertFrom + ": " + app.AlertText.Replace("\r", " ").Replace("\n", " ");
-    else if (k == "live") title = app.AlertFrom + " is sharing the screen";
-    else if (k != null) title = OsUi.KindLabel(k) + (app.AlertFrom != "" ? " - " + app.AlertFrom : "");
-    else title = "Messages";
-    TextRenderer.DrawText(g, title, k != null ? fMid : fBig, new Rectangle(56, 0, w - 56 - 64, h), fg, bg, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-    int ax = w - 52, ay = (h - 34) / 2;
-    if (app.Other != "") OsUi.DrawAvatar(g, app.Other, new RectangleF(ax, ay, 34, 34), bg, fAvatar);
-    if (app.Unread > 0 && k == null) {
-      int bx = ax - 30, by = (h - 22) / 2;
-      using (SolidBrush b = new SolidBrush(OsUi.Blue)) g.FillEllipse(b, bx, by, 22, 22);
-      string n = app.Unread > 9 ? "9+" : app.Unread.ToString();
-      OsUi.DrawCentered(g, n, fSmall, new RectangleF(bx, by, 22, 22), Color.White);
+    string[] kinds = { "msg", "red", "yellow", "green" };
+    float dx = 56, ds = 20;
+    for (int i = 0; i < kinds.Length; i++) {
+      string kd = kinds[i];
+      bool lit = app.Lit.Contains(kd) || (kd == "msg" && app.Lit.Contains("live"));
+      RectangleF r = new RectangleF(dx + i * 30, cy - ds / 2, ds, ds);
+      if (lit) {
+        Color c = app.BlinkOn ? OsUi.KindDark(kd) : OsUi.KindColor(kd);
+        if (!app.BlinkOn) { using (SolidBrush gl = new SolidBrush(Color.FromArgb(70, OsUi.KindColor(kd)))) g.FillEllipse(gl, r.X - 4, r.Y - 4, r.Width + 8, r.Height + 8); }
+        using (SolidBrush b = new SolidBrush(c)) g.FillEllipse(b, r);
+      } else {
+        using (Pen pn = new Pen(Color.FromArgb(74, 80, 86), 2f)) g.DrawEllipse(pn, r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2);
+      }
     }
+    int ax = w - 46, ay = (h - 32) / 2;
+    if (app.Other != "") OsUi.DrawAvatar(g, app.Other, new RectangleF(ax, ay, 32, 32), bg, fAvatar);
+    string t = app.TipText();
+    if (t != lastTip) { lastTip = t; tip.SetToolTip(this, t); }
   }
 }
 
@@ -936,6 +941,14 @@ public class OsApp : ApplicationContext {
   HashSet<string> seenKeys = new HashSet<string>();
   Dictionary<string, bool> conn = new Dictionary<string, bool>();
   public string Alert;
+  public HashSet<string> Lit = new HashSet<string>();
+  Dictionary<string, string> litText = new Dictionary<string, string>();
+  public string TipText() {
+    if (Lit.Count == 0) return "Messages";
+    List<string> parts = new List<string>();
+    foreach (string k in new string[] { "red", "yellow", "green", "live", "msg" }) { if (Lit.Contains(k) && litText.ContainsKey(k)) parts.Add(litText[k]); }
+    return string.Join("\n", parts.ToArray());
+  }
   public string AlertFrom = "";
   public string AlertText = "";
   string cfgDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OfficeSignal");
@@ -1003,20 +1016,31 @@ public class OsApp : ApplicationContext {
     Pill.Invalidate();
     Watch();
   }
-  void ClearAlert() { Alert = null; AlertFrom = ""; AlertText = ""; blink.Stop(); Pill.Invalidate(); }
+  void ClearAlert() { Alert = null; AlertFrom = ""; AlertText = ""; Lit.Clear(); litText.Clear(); blink.Stop(); Pill.Invalidate(); }
+  void ClearKind(string k) {
+    Lit.Remove(k); litText.Remove(k);
+    if (Lit.Count == 0) { Alert = null; blink.Stop(); }
+    Pill.Invalidate();
+  }
   void StartAlert(string kind, string from, string text) {
     Alert = kind; AlertFrom = from; AlertText = text ?? ""; BlinkOn = false;
+    Lit.Add(kind);
+    string desc;
+    if (kind == "msg") desc = from + ": " + (text ?? "");
+    else if (kind == "live") desc = from + " is sharing the screen";
+    else desc = OsUi.KindLabel(kind) + " - " + from + ((text ?? "") != "" ? ": " + text : "");
+    litText[kind] = desc;
     if (!Pill.Visible) Pill.Show();
     Pill.TopMost = true; Pill.Invalidate();
     blink.Start();
   }
   void Watch() {
     bool shown = Chat.Visible && Chat.WindowState != FormWindowState.Minimized;
-    bool wantPill = Alert != null || !shown;
+    bool wantPill = Lit.Count > 0 || !shown;
     if (wantPill && !Pill.Visible) { Pill.Show(); Pill.TopMost = true; }
     else if (!wantPill && Pill.Visible) Pill.Hide();
     if (ChatActive()) {
-      if (Alert == "msg") ClearAlert();
+      if (Lit.Contains("msg")) ClearKind("msg");
       if (Unread != 0) { Unread = 0; Pill.Invalidate(); }
       if (lastOtherTime > seenSent) { seenSent = lastOtherTime; Send("", "seen"); }
     }
@@ -1117,7 +1141,9 @@ public class OsApp : ApplicationContext {
     viewer.Show(); viewer.Activate();
   }
   public void PillClicked() {
-    if (Alert == "live") { string who = AlertFrom; ClearAlert(); OpenViewer(who); return; }
+    if (Lit.Contains("live") && !Lit.Contains("red") && !Lit.Contains("yellow") && !Lit.Contains("green")) {
+      string who = litText["live"].Replace(" is sharing the screen", ""); ClearAlert(); OpenViewer(who); return;
+    }
     ShowChat();
   }
   public void SetTheme(bool light) {
@@ -1238,15 +1264,15 @@ public class OsApp : ApplicationContext {
     if (live && !m.Mine && m.Type == "live") { StartAlert("live", m.Name, ""); return; }
     if (!m.Mine && m.Type == "livestop") {
       if (viewer != null && !viewer.IsDisposed) viewer.SetStopped();
-      if (Alert == "live") ClearAlert();
+      if (Lit.Contains("live")) ClearKind("live");
       return;
     }
     if (live && !m.Mine && m.Type == "shot") {
-      if (!ChatActive()) { Unread++; if (Alert == null || Alert == "msg") StartAlert("msg", m.Name, "sent a screenshot"); }
+      if (!ChatActive()) { Unread++; StartAlert("msg", m.Name, "sent a screenshot"); }
       Pill.Invalidate();
     } else if (live && !m.Mine) {
       if (OsUi.IsSignal(m.Type)) StartAlert(m.Type, m.Name, m.Text);
-      else if (!ChatActive()) { Unread++; if (Alert == null || Alert == "msg") StartAlert("msg", m.Name, m.Text); }
+      else if (!ChatActive()) { Unread++; StartAlert("msg", m.Name, m.Text); }
       Pill.Invalidate();
     }
   }
