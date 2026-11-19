@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.12'
+$global:appVersion = '2026-11-19.13'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -845,12 +845,53 @@ public class PillForm : Form {
       p.AddArc(0, 0, h, h, 90, 180); p.AddArc(w - h, 0, h, h, 270, 180); p.CloseFigure();
       Region = new Region(p);
     }
+    LoadPos();
   }
   protected override bool ShowWithoutActivation { get { return true; } }
   protected override CreateParams CreateParams {
     get { CreateParams cp = base.CreateParams; cp.ExStyle |= 0x00000080 | 0x00000008; return cp; }
   }
-  protected override void OnClick(EventArgs e) { base.OnClick(e); app.PillClicked(); }
+  Point downPt, startLoc;
+  bool pressing, moved;
+  static string PosFile() { return Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OfficeSignal"), "pill.txt"); }
+  void LoadPos() {
+    try {
+      if (!File.Exists(PosFile())) return;
+      string[] p = File.ReadAllText(PosFile()).Trim().Split(',');
+      Point pt = new Point(int.Parse(p[0]), int.Parse(p[1]));
+      foreach (Screen sc in Screen.AllScreens) {
+        if (sc.WorkingArea.Contains(new Rectangle(pt, Size))) { Location = pt; return; }
+      }
+    } catch { }
+  }
+  protected override void OnMouseDown(MouseEventArgs e) {
+    base.OnMouseDown(e);
+    if (e.Button != MouseButtons.Left) return;
+    pressing = true; moved = false; downPt = Cursor.Position; startLoc = Location;
+  }
+  protected override void OnMouseMove(MouseEventArgs e) {
+    base.OnMouseMove(e);
+    if (!pressing) return;
+    Point c = Cursor.Position;
+    int dx = c.X - downPt.X, dy = c.Y - downPt.Y;
+    if (!moved && Math.Abs(dx) + Math.Abs(dy) > 5) { moved = true; Cursor = Cursors.SizeAll; }
+    if (moved) Location = new Point(startLoc.X + dx, startLoc.Y + dy);
+  }
+  protected override void OnMouseUp(MouseEventArgs e) {
+    base.OnMouseUp(e);
+    if (!pressing) return;
+    pressing = false;
+    Cursor = Cursors.Hand;
+    if (moved) {
+      Rectangle wa = Screen.FromPoint(Cursor.Position).WorkingArea;
+      int x = Math.Max(wa.Left, Math.Min(Left, wa.Right - Width));
+      int y = Math.Max(wa.Top, Math.Min(Top, wa.Bottom - Height));
+      Location = new Point(x, y);
+      try { Directory.CreateDirectory(Path.GetDirectoryName(PosFile())); File.WriteAllText(PosFile(), x + "," + y); } catch { }
+    } else if (e.Button == MouseButtons.Left) {
+      app.PillClicked();
+    }
+  }
   protected override void OnPaint(PaintEventArgs e) {
     Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
     int w = Width, h = Height;
