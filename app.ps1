@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-19.16'
+$global:appVersion = '2026-11-20.1'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -100,13 +100,14 @@ public static class OsUi {
   public static void SetTheme(bool light) {
     Light = light;
     if (light) {
-      Bg = Color.White; Box = Color.FromArgb(239, 243, 244); Bubble = Color.FromArgb(239, 243, 244);
-      Line = Color.FromArgb(207, 217, 222); Ink = Color.FromArgb(15, 20, 25); Mute = Color.FromArgb(83, 100, 113);
+      Bg = Color.FromArgb(250, 249, 245); Box = Color.White; Bubble = Color.FromArgb(240, 238, 230);
+      Line = Color.FromArgb(229, 226, 216); Ink = Color.FromArgb(61, 57, 41); Mute = Color.FromArgb(135, 134, 127);
     } else {
-      Bg = Color.FromArgb(22, 24, 28); Box = Color.FromArgb(32, 35, 39); Bubble = Color.FromArgb(47, 51, 54);
-      Line = Color.FromArgb(47, 51, 54); Ink = Color.FromArgb(231, 233, 234); Mute = Color.FromArgb(113, 118, 123);
+      Bg = Color.FromArgb(38, 38, 36); Box = Color.FromArgb(48, 48, 46); Bubble = Color.FromArgb(20, 20, 19);
+      Line = Color.FromArgb(62, 62, 58); Ink = Color.FromArgb(240, 238, 230); Mute = Color.FromArgb(166, 163, 154);
     }
   }
+  public static Color Clay = Color.FromArgb(217, 119, 87);
   public static Color Hover() { return Mix(Bg, Ink, 0.09f); }
   public static void DrawCentered(Graphics g, string text, Font f, RectangleF r, Color c) {
     using (SolidBrush b = new SolidBrush(c)) using (StringFormat sf = new StringFormat()) {
@@ -192,6 +193,7 @@ public static class OsUi {
 
 public class RoundBtn : Control {
   public Color Fill, Fore;
+  public Color Dot = Color.Empty;
   bool hover;
   public RoundBtn(string text, Color fill, Color fore) {
     SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
@@ -204,6 +206,19 @@ public class RoundBtn : Control {
   protected override void OnPaint(PaintEventArgs e) {
     Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
     g.Clear(Parent != null ? Parent.BackColor : OsUi.Bg);
+    if (Dot != Color.Empty) {
+      Color bgc = Parent != null ? Parent.BackColor : OsUi.Bg;
+      Color tf = OsUi.Mix(bgc, Dot, hover ? 0.26f : 0.15f);
+      using (GraphicsPath p = OsUi.Round(new RectangleF(0.5f, 0.5f, Width - 2, Height - 2), Height / 2f)) {
+        using (SolidBrush b = new SolidBrush(tf)) g.FillPath(b, p);
+        using (Pen pn = new Pen(OsUi.Mix(bgc, Dot, 0.45f), 1f)) g.DrawPath(pn, p);
+      }
+      Size ts = TextRenderer.MeasureText(Text, Font);
+      int tx = (Width - ts.Width - 14) / 2;
+      using (SolidBrush db = new SolidBrush(Dot)) g.FillEllipse(db, tx, Height / 2f - 4, 8, 8);
+      TextRenderer.DrawText(g, Text, Font, new Point(tx + 14, (Height - ts.Height) / 2), OsUi.Ink, tf);
+      return;
+    }
     Color c = hover ? OsUi.Mix(Fill, Color.White, 0.12f) : Fill;
     using (GraphicsPath p = OsUi.Round(new RectangleF(0, 0, Width - 1, Height - 1), Height / 2f))
     using (SolidBrush b = new SolidBrush(c)) { g.FillPath(b, p); }
@@ -225,10 +240,21 @@ public class IconBtn : Control {
     Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
     g.Clear(BackColor);
     RectangleF r = new RectangleF(0.5f, 0.5f, Width - 2, Height - 2);
-    if (hover) { using (GraphicsPath p = OsUi.Round(r, Kind == "send" ? Height / 2f : 8)) using (SolidBrush b = new SolidBrush(Kind == "send" ? Color.FromArgb(30, 29, 155, 240) : OsUi.Hover())) g.FillPath(b, p); }
+    if (Kind == "send") {
+      RectangleF sr = new RectangleF(3, 3, Width - 7, Height - 7);
+      using (GraphicsPath p = OsUi.Round(sr, 8)) using (SolidBrush b = new SolidBrush(hover ? OsUi.Mix(OsUi.Clay, Color.Black, 0.12f) : OsUi.Clay)) g.FillPath(b, p);
+      using (Pen ap = new Pen(Color.White, 2f)) {
+        ap.StartCap = LineCap.Round; ap.EndCap = LineCap.Round; ap.LineJoin = LineJoin.Round;
+        float ccx = Width / 2f - 0.5f, ccy = Height / 2f - 0.5f;
+        g.DrawLine(ap, ccx, ccy + 6, ccx, ccy - 6);
+        g.DrawLines(ap, new PointF[] { new PointF(ccx - 5, ccy - 1), new PointF(ccx, ccy - 6), new PointF(ccx + 5, ccy - 1) });
+      }
+      return;
+    }
+    if (hover) { using (GraphicsPath p = OsUi.Round(r, 8)) using (SolidBrush b = new SolidBrush(OsUi.Hover())) g.FillPath(b, p); }
     if (Outline) { using (GraphicsPath p = OsUi.Round(r, 8)) using (Pen pn = new Pen(OsUi.Blue, 1)) g.DrawPath(pn, p); }
     float cx = Width / 2f, cy = Height / 2f;
-    Color col = Kind == "send" ? OsUi.Blue : OsUi.Ink;
+    Color col = (Kind == "screen" || Kind == "gear" || Kind == "min" || Kind == "expand" || Kind == "close") ? OsUi.Mute : OsUi.Ink;
     using (Pen pen = new Pen(col, 1.8f)) {
       pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round; pen.LineJoin = LineJoin.Round;
       if (Kind == "close") {
@@ -285,9 +311,12 @@ public class ChatView : Control {
     if (m.Type == "livestop") return m.Mine ? "You stopped sharing your screen" : m.Name + " stopped sharing the screen";
     return (m.Mine ? "You sent: " : "") + OsUi.KindLabel(m.Type) + (m.Text != "" ? " - " + m.Text : "");
   }
+  Font fSerif = new Font("Georgia", 11f);
+  Font MsgFont(OsMsg m) { return m.Mine ? fBody : fSerif; }
+  int MaxFor(OsMsg m) { return m.Mine ? MaxBubble() : Math.Max(120, Width - 20); }
   Size BubbleSize(OsMsg m) {
-    Size s = TextRenderer.MeasureText(m.Text == "" ? " " : m.Text, fBody, new Size(MaxBubble() - 28, int.MaxValue), WrapFlags);
-    return new Size(Math.Min(MaxBubble(), s.Width + 28), s.Height + 18);
+    Size s = TextRenderer.MeasureText(m.Text == "" ? " " : m.Text, MsgFont(m), new Size(MaxFor(m) - 28, int.MaxValue), WrapFlags);
+    return new Size(Math.Min(MaxFor(m), s.Width + 28), s.Height + 18);
   }
   public string Peer = "";
   Font fVu = new Font("Segoe UI", 8.25f);
@@ -411,11 +440,11 @@ public class ChatView : Control {
           }
         }
         Size bs = BubbleSize(m);
-        int x = m.Mine ? Width - 14 - bs.Width : 14;
+        int x = m.Mine ? Width - 14 - bs.Width : 0;
         Rectangle r = new Rectangle(x, y, bs.Width, bs.Height);
-        Color fill = m.Mine ? OsUi.Blue : OsUi.Bubble;
-        using (GraphicsPath p = OsUi.Round(r, Math.Min(18, bs.Height / 2f))) using (SolidBrush b = new SolidBrush(fill)) g.FillPath(b, p);
-        TextRenderer.DrawText(g, m.Text, fBody, new Rectangle(x + 14, y + 9, bs.Width - 28, bs.Height - 18), m.Mine ? Color.White : OsUi.Ink, fill, WrapFlags);
+        Color fill = m.Mine ? OsUi.Bubble : BackColor;
+        if (m.Mine) { using (GraphicsPath p = OsUi.Round(r, Math.Min(16, bs.Height / 2f))) using (SolidBrush b = new SolidBrush(fill)) g.FillPath(b, p); }
+        TextRenderer.DrawText(g, m.Text, MsgFont(m), new Rectangle(x + 14, y + 9, bs.Width - 28, bs.Height - 18), OsUi.Ink, fill, WrapFlags);
         TextRenderer.DrawText(g, meta, fMeta, new Rectangle(m.Mine ? 0 : x + 6, y + bs.Height + 4, m.Mine ? Width - 20 : Width, 16), OsUi.Mute, m.Mine ? TextFormatFlags.Right : TextFormatFlags.Left);
         y = y0;
       }
@@ -507,17 +536,20 @@ public class ChatForm : Form {
     Head = new Header(this);
     sig = new Panel(); sig.BackColor = OsUi.Bg;
     sig.Paint += delegate(object o, PaintEventArgs e) { using (Pen p = new Pen(OsUi.Line)) e.Graphics.DrawLine(p, 0, sig.Height - 1, sig.Width, sig.Height - 1); };
-    bRed = new RoundBtn("Emergency", OsUi.Red, Color.White);
-    bYel = new RoundBtn("Come", OsUi.Yellow, OsUi.DarkText);
-    bGrn = new RoundBtn("Call off", OsUi.Green, Color.White);
+    bRed = new RoundBtn("Emergency", OsUi.Red, Color.White); bRed.Dot = OsUi.Red;
+    bYel = new RoundBtn("Come", OsUi.Yellow, OsUi.DarkText); bYel.Dot = Color.FromArgb(230, 180, 0);
+    bGrn = new RoundBtn("Call off", OsUi.Green, Color.White); bGrn.Dot = OsUi.Green;
+    bRed.Font = bYel.Font = bGrn.Font = new Font("Segoe UI", 10f);
     sig.Controls.Add(bRed); sig.Controls.Add(bYel); sig.Controls.Add(bGrn);
     sig.Resize += delegate { LayoutSignals(); };
     View = new ChatView(); View.App = app;
     bottom = new Panel(); bottom.BackColor = OsUi.Bg;
     bottom.Paint += delegate(object o, PaintEventArgs e) {
       Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-      using (Pen p = new Pen(OsUi.Line)) g.DrawLine(p, 0, 0, bottom.Width, 0);
-      using (GraphicsPath gp = OsUi.Round(new RectangleF(12, 12, bottom.Width - 24, 48), 16)) using (SolidBrush b = new SolidBrush(OsUi.Box)) g.FillPath(b, gp);
+      using (GraphicsPath gp = OsUi.Round(new RectangleF(12, 10, bottom.Width - 24, 52), 18)) {
+        using (SolidBrush b = new SolidBrush(OsUi.Box)) g.FillPath(b, gp);
+        using (Pen p = new Pen(OsUi.Line, 1f)) g.DrawPath(p, gp);
+      }
     };
     input = new TextBox(); input.BorderStyle = BorderStyle.None; input.BackColor = OsUi.Box; input.ForeColor = OsUi.Ink; input.Font = new Font("Segoe UI", 11f);
     input.MaxLength = 2000;
@@ -556,7 +588,7 @@ public class ChatForm : Form {
   }
   protected override void OnHandleCreated(EventArgs e) {
     base.OnHandleCreated(e);
-    try { OsNative.SendMessage(input.Handle, 0x1501, (IntPtr)1, "Start a new message"); } catch { }
+    try { OsNative.SendMessage(input.Handle, 0x1501, (IntPtr)1, "Reply..."); } catch { }
   }
   protected override void OnFormClosing(FormClosingEventArgs e) {
     if (!Quitting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); return; }
@@ -997,7 +1029,7 @@ public class OsApp : ApplicationContext {
     Name = name; Cid = cid; Topic = topic;
     try { ServicePointManager.DefaultConnectionLimit = 64; ServicePointManager.Expect100Continue = false; } catch { }
     try { OsNative.SetCurrentProcessExplicitAppUserModelID("RoboTalent.OfficeSignal"); } catch { }
-    try { OsUi.SetTheme(File.Exists(Path.Combine(cfgDir, "theme.txt")) && File.ReadAllText(Path.Combine(cfgDir, "theme.txt")).Trim() == "light"); } catch { }
+    try { OsUi.SetTheme(!(File.Exists(Path.Combine(cfgDir, "theme.txt")) && File.ReadAllText(Path.Combine(cfgDir, "theme.txt")).Trim() == "dark")); } catch { OsUi.SetTheme(true); }
     AppIcon = OsUi.MakeIcon(64);
     Chat = new ChatForm(this);
     IntPtr h1 = Chat.Handle;
