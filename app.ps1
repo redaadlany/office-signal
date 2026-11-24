@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.3'
+$global:appVersion = '2026-11-24.4'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -1016,7 +1016,7 @@ public class PillForm : Form {
   string sentKind; DateTime sentAt;
   public void ShowSent(string kd) {
     sentKind = kd; sentAt = DateTime.Now; Invalidate();
-    System.Windows.Forms.Timer ft = new System.Windows.Forms.Timer(); ft.Interval = 1200;
+    System.Windows.Forms.Timer ft = new System.Windows.Forms.Timer(); ft.Interval = 3000;
     ft.Tick += delegate { ft.Stop(); ft.Dispose(); sentKind = null; Invalidate(); };
     ft.Start();
   }
@@ -1061,10 +1061,7 @@ public class PillForm : Form {
       if (mi >= 0) {
         string kd = miniKinds[mi];
         app.Send("", kd);
-        sentKind = kd; sentAt = DateTime.Now; Invalidate();
-        System.Windows.Forms.Timer ft = new System.Windows.Forms.Timer(); ft.Interval = 900;
-        ft.Tick += delegate { ft.Stop(); ft.Dispose(); sentKind = null; Invalidate(); };
-        ft.Start();
+        ShowSent(kd);
         return;
       }
     }
@@ -1084,9 +1081,11 @@ public class PillForm : Form {
     // the strongest lit signal colours the whole bar
     string top = null;
     foreach (string k in new string[] { "red", "yellow", "green", "live", "msg" }) { if (app.Lit.Contains(k)) { top = k; break; } }
+    bool mine = false;
+    if (top == null && sentKind != null) { top = sentKind; mine = true; }
     Color bg = OsUi.PillBg;
-    if (top != null) bg = app.BlinkOn ? OsUi.KindDark(top) : OsUi.KindColor(top);
-    Color ink = top == null ? OsUi.PillInk : (top == "yellow" && !app.BlinkOn ? OsUi.KindText("yellow") : Color.White);
+    if (top != null) bg = (app.BlinkOn && !mine) ? OsUi.KindDark(top) : OsUi.KindColor(top);
+    Color ink = top == null ? OsUi.PillInk : (top == "yellow" && (mine || !app.BlinkOn) ? OsUi.KindText("yellow") : Color.White);
     g.Clear(bg);
     using (GraphicsPath p = new GraphicsPath()) {
       p.AddArc(0, 0, h - 1, h - 1, 90, 180); p.AddArc(w - h, 0, h - 1, h - 1, 270, 180); p.CloseFigure();
@@ -1103,7 +1102,8 @@ public class PillForm : Form {
       RectangleF tr = new RectangleF(48, 6, w - 48 - 80, h / 2f);
       RectangleF fr = new RectangleF(48, h / 2f - 1, w - 48 - 80, h / 2f - 5);
       TextRenderer.DrawText(g, title, fMid, Rectangle.Round(tr), ink, TextFormatFlags.Left | TextFormatFlags.Bottom | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-      if (app.AlertFrom != "") TextRenderer.DrawText(g, app.AlertFrom, fSmall, Rectangle.Round(fr), Color.FromArgb(220, ink), TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+      string who = mine ? "Sent" : app.AlertFrom;
+      if (who != "") TextRenderer.DrawText(g, who, fSmall, Rectangle.Round(fr), Color.FromArgb(220, ink), TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
     } else {
       string[] kinds = { "msg", "red", "yellow", "green" };
       float dx = 56, ds = 20;
@@ -1120,7 +1120,7 @@ public class PillForm : Form {
       RectangleF r = new RectangleF(mx, cy - 21.5f + i * 15, msz, msz);
       miniRects[i] = r;
       Color mc = OsUi.KindColor(miniKinds[i]);
-      if (sentKind == miniKinds[i]) { using (SolidBrush gl = new SolidBrush(Color.FromArgb(110, mc))) g.FillEllipse(gl, r.X - 4, r.Y - 4, r.Width + 8, r.Height + 8); }
+      if (sentKind == miniKinds[i] && top == null) { using (SolidBrush gl = new SolidBrush(Color.FromArgb(110, mc))) g.FillEllipse(gl, r.X - 4, r.Y - 4, r.Width + 8, r.Height + 8); }
       using (SolidBrush b = new SolidBrush(mc)) g.FillEllipse(b, r);
       if (top != null) using (Pen rp = new Pen(Color.FromArgb(200, Color.White), 1.5f)) g.DrawEllipse(rp, r);
     }
@@ -1188,9 +1188,8 @@ public class OsApp : ApplicationContext {
         string kd = id == 1 ? "red" : id == 2 ? "yellow" : "green";
         Send("", kd); Pill.ShowSent(kd);
         if (!Pill.Visible) Pill.Show();
-        tray.ShowBalloonTip(1500, "Office Signal", "Sent: " + OsUi.KindLabel(kd), ToolTipIcon.None);
+        Pill.TopMost = true;
       };
-      if (keys.Failed.Count > 0) tray.ShowBalloonTip(4000, "Office Signal", "These shortcuts are used by another app: " + string.Join(", ", keys.Failed.ToArray()), ToolTipIcon.Warning);
     } catch { }
     watch = new System.Windows.Forms.Timer(); watch.Interval = 500; watch.Tick += delegate { Watch(); }; watch.Start();
     blink = new System.Windows.Forms.Timer(); blink.Interval = 450;
