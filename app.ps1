@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.8'
+$global:appVersion = '2026-11-24.9'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -1287,7 +1287,9 @@ public class OsApp : ApplicationContext {
   }
   public static int VoiceIndex(string kind) { if (kind == "red") return 0; if (kind == "yellow") return 1; if (kind == "green") return 2; if (kind == "msg") return 3; return -1; }
   // recorded voices (sounds\red.mp3, yellow.mp3, green.mp3), downloaded from GitHub once
-  string SoundDir() { return Path.Combine(cfgDir, "sounds"); }
+  // change SoundsVer when the files in sounds/ on GitHub change, so both PCs download them again
+  const string SoundsVer = "2";
+  string SoundDir() { return Path.Combine(Path.Combine(cfgDir, "sounds"), SoundsVer); }
   public void FetchSounds() {
     ThreadPool.QueueUserWorkItem(delegate {
       foreach (string k in new string[] { "red", "yellow", "green", "msg" }) {
