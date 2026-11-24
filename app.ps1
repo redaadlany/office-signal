@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.6'
+$global:appVersion = '2026-11-24.7'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -773,7 +773,8 @@ public class SettingsView : Control {
   Font fSeg = new Font("Segoe UI Semibold", 10f);
   Rectangle segRect;
   KeyBox[] kb = new KeyBox[4];
-  Label resetKeys;
+  TextBox[] vt = new TextBox[4];
+  Label resetKeys, voiceToggle, voiceTest;
   public SettingsView(ChatForm f) {
     SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     form = f; BackColor = OsUi.Bg; Cursor = Cursors.Default;
@@ -794,6 +795,16 @@ public class SettingsView : Control {
         LoadKeys();
       };
     }
+    for (int i = 0; i < 4; i++) {
+      TextBox t = new TextBox(); t.BorderStyle = BorderStyle.None; t.Font = new Font("Segoe UI", 10f); t.MaxLength = 60; t.Tag = i; vt[i] = t; Controls.Add(t);
+      t.TextChanged += delegate(object o, EventArgs e) { TextBox tb = (TextBox)o; form.App.VoiceText[(int)tb.Tag] = tb.Text; form.App.SaveVoice(); };
+    }
+    voiceToggle = new Label(); voiceToggle.AutoSize = true; voiceToggle.Cursor = Cursors.Hand; voiceToggle.Font = new Font("Segoe UI Semibold", 9f);
+    voiceToggle.Click += delegate { form.App.VoiceOn = !form.App.VoiceOn; form.App.SaveVoice(); voiceToggle.Text = form.App.VoiceOn ? "Voice: on" : "Voice: off"; };
+    Controls.Add(voiceToggle);
+    voiceTest = new Label(); voiceTest.Text = "Test voice"; voiceTest.AutoSize = true; voiceTest.Cursor = Cursors.Hand; voiceTest.Font = new Font("Segoe UI", 9f, FontStyle.Underline);
+    voiceTest.Click += delegate { form.App.Speak("red", form.App.Other != "" ? form.App.Other : form.App.Name, true); };
+    Controls.Add(voiceTest);
     resetKeys = new Label(); resetKeys.Text = "Reset shortcuts"; resetKeys.AutoSize = true; resetKeys.Cursor = Cursors.Hand; resetKeys.Font = new Font("Segoe UI", 9f, FontStyle.Underline);
     resetKeys.Click += delegate { if (form.App.keys != null) { form.App.keys.Reset(); LoadKeys(); } };
     Controls.Add(resetKeys);
@@ -802,12 +813,16 @@ public class SettingsView : Control {
   void LoadKeys() {
     OsHotkeys h = form.App.keys;
     for (int i = 0; i < 4; i++) { kb[i].Mods = h != null ? h.Mods[i] : OsHotkeys.DefMods[i]; kb[i].Vk = h != null ? h.Vk[i] : OsHotkeys.DefVk[i]; kb[i].Invalidate(); }
+    for (int i = 0; i < 4; i++) vt[i].Text = form.App.VoiceText[i];
+    voiceToggle.Text = form.App.VoiceOn ? "Voice: on" : "Voice: off";
   }
   public void Open() { nameBox.Text = form.App.Name; LoadKeys(); Visible = true; BringToFront(); nameBox.Focus(); nameBox.SelectAll(); }
   public void ApplyTheme() {
     BackColor = OsUi.Bg; close.BackColor = OsUi.Bg; save.BackColor = OsUi.Bg;
     nameBox.BackColor = OsUi.Box; nameBox.ForeColor = OsUi.Ink;
     if (resetKeys != null) { resetKeys.BackColor = OsUi.Bg; resetKeys.ForeColor = OsUi.Blue; }
+    if (voiceToggle != null) { voiceToggle.BackColor = OsUi.Bg; voiceToggle.ForeColor = OsUi.Blue; voiceTest.BackColor = OsUi.Bg; voiceTest.ForeColor = OsUi.Blue; }
+    for (int i = 0; i < 4; i++) if (vt[i] != null) { vt[i].BackColor = OsUi.Box; vt[i].ForeColor = OsUi.Ink; }
     Invalidate(true);
   }
   protected override void OnResize(EventArgs e) {
@@ -816,8 +831,13 @@ public class SettingsView : Control {
     segRect = new Rectangle(16, 112, Width - 32, 40);
     nameBox.Bounds = new Rectangle(30, 200 + (44 - nameBox.PreferredHeight) / 2, Width - 60, nameBox.PreferredHeight);
     save.Bounds = new Rectangle(16, 262, Width - 32, 42);
-    for (int i = 0; i < 4; i++) if (kb[i] != null) kb[i].Bounds = new Rectangle(Width - 16 - 190, 356 + i * 44, 190, 36);
+    int kw = 150, nameW = 104;
+    for (int i = 0; i < 4; i++) {
+      if (kb[i] != null) kb[i].Bounds = new Rectangle(Width - 16 - kw, 356 + i * 44, kw, 36);
+      if (vt[i] != null) { int tx = 38 + nameW + 12, tw = Width - 16 - kw - 8 - tx - 20; vt[i].Bounds = new Rectangle(tx, 356 + i * 44 + (36 - vt[i].PreferredHeight) / 2, Math.Max(40, tw), vt[i].PreferredHeight); }
+    }
     if (resetKeys != null) resetKeys.Location = new Point(16, 356 + 4 * 44 + 4);
+    if (voiceToggle != null) { voiceToggle.Location = new Point(Width - 16 - 150, 356 + 4 * 44 + 4); voiceTest.Location = new Point(Width - 16 - 70, 356 + 4 * 44 + 4); }
   }
   protected override void OnMouseDown(MouseEventArgs e) {
     base.OnMouseDown(e);
@@ -843,12 +863,15 @@ public class SettingsView : Control {
     TextRenderer.DrawText(g, "Light", fSeg, right, OsUi.Light ? Color.White : OsUi.Ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
     TextRenderer.DrawText(g, "Your name", fLbl, new Point(16, 176), OsUi.Mute);
     using (GraphicsPath p = OsUi.Round(new RectangleF(16, 200, Width - 32, 44), 10)) using (SolidBrush b = new SolidBrush(OsUi.Box)) g.FillPath(b, p);
-    TextRenderer.DrawText(g, "Shortcuts (click a box, then press the keys)", fLbl, new Point(16, 328), OsUi.Mute);
+    TextRenderer.DrawText(g, "Voice it says  ({name} = who sent)", fLbl, new Point(154, 328), OsUi.Mute);
+    TextRenderer.DrawText(g, "Shortcut", fLbl, new Point(Width - 16 - 150, 328), OsUi.Mute);
     Color[] dots = { OsUi.Red, OsUi.Yellow, OsUi.Green, OsUi.Blue };
+    string[] names = { "Emergency", "Come", "Call off", "Message" };
     for (int i = 0; i < 4; i++) {
       int y = 356 + i * 44;
       using (SolidBrush b = new SolidBrush(dots[i])) g.FillEllipse(b, 18, y + 13, 10, 10);
-      TextRenderer.DrawText(g, OsHotkeys.Names[i], fSeg, new Rectangle(38, y, Width - 260, 36), OsUi.Ink, TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+      TextRenderer.DrawText(g, names[i], fSeg, new Rectangle(38, y, 104, 36), OsUi.Ink, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+      using (GraphicsPath p = OsUi.Round(new RectangleF(146, y, Width - 16 - 150 - 8 - 146, 36), 9)) using (SolidBrush b = new SolidBrush(OsUi.Box)) g.FillPath(b, p);
     }
   }
 }
@@ -1172,6 +1195,7 @@ public class OsApp : ApplicationContext {
     try { OsNative.SetCurrentProcessExplicitAppUserModelID("RoboTalent.OfficeSignal"); } catch { }
     try { OsUi.SetTheme(!(File.Exists(Path.Combine(cfgDir, "theme.txt")) && File.ReadAllText(Path.Combine(cfgDir, "theme.txt")).Trim() == "dark")); } catch { OsUi.SetTheme(true); }
     AppIcon = OsUi.MakeIcon(64);
+    LoadVoice();
     Chat = new ChatForm(this);
     IntPtr h1 = Chat.Handle;
     Pill = new PillForm(this);
@@ -1244,7 +1268,35 @@ public class OsApp : ApplicationContext {
     if (Lit.Count == 0) { Alert = null; blink.Stop(); }
     Pill.Invalidate();
   }
+  // ---- voice: Windows reads a short text when a signal or message arrives ----
+  public bool VoiceOn = true;
+  public string[] VoiceText = { "Emergency, {name}", "Come please, {name}", "Call off, {name}", "Message from {name}" };
+  System.Speech.Synthesis.SpeechSynthesizer synth;
+  string VoiceFile() { return Path.Combine(cfgDir, "voice.txt"); }
+  public void LoadVoice() {
+    try {
+      if (!File.Exists(VoiceFile())) return;
+      string[] l = File.ReadAllLines(VoiceFile(), Encoding.UTF8);
+      if (l.Length > 0) VoiceOn = l[0].Trim() != "off";
+      for (int i = 0; i < 4 && i + 1 < l.Length; i++) VoiceText[i] = l[i + 1];
+    } catch { }
+  }
+  public void SaveVoice() {
+    try { Directory.CreateDirectory(cfgDir); List<string> l = new List<string>(); l.Add(VoiceOn ? "on" : "off"); l.AddRange(VoiceText); File.WriteAllLines(VoiceFile(), l.ToArray(), new UTF8Encoding(false)); } catch { }
+  }
+  public static int VoiceIndex(string kind) { if (kind == "red") return 0; if (kind == "yellow") return 1; if (kind == "green") return 2; if (kind == "msg") return 3; return -1; }
+  public void Speak(string kind, string from, bool test) {
+    if (!VoiceOn && !test) return;
+    int i = VoiceIndex(kind); if (i < 0) return;
+    string t = (VoiceText[i] ?? "").Replace("{name}", from ?? "").Trim().Trim(',').Trim();
+    if (t == "") return;
+    try {
+      if (synth == null) { synth = new System.Speech.Synthesis.SpeechSynthesizer(); synth.Volume = 70; synth.Rate = 0; }
+      synth.SpeakAsyncCancelAll(); synth.SpeakAsync(t);
+    } catch { }
+  }
   void StartAlert(string kind, string from, string text) {
+    Speak(kind, from, false);
     Alert = kind; AlertFrom = from; AlertText = text ?? ""; BlinkOn = false;
     if (OsUi.IsSignal(kind)) { foreach (string o in new string[] { "red", "yellow", "green" }) { if (o != kind) { Lit.Remove(o); litText.Remove(o); litAt.Remove(o); } } }
     Lit.Add(kind);
@@ -1383,6 +1435,7 @@ public class OsApp : ApplicationContext {
   }
   public void Shutdown() {
     try { if (keys != null) keys.Dispose(); } catch { }
+    try { if (synth != null) synth.Dispose(); } catch { }
     try { StopShare(); } catch { }
     running = false;
     try { tray.Visible = false; tray.Dispose(); } catch { }
@@ -1552,7 +1605,7 @@ public class OsApp : ApplicationContext {
 '@
 $goodFile = $global:goodFile
 $built = $false
-try { Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms, System.Drawing, System.Web.Extensions -IgnoreWarnings -ErrorAction Stop; $built = $true }
+try { Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms, System.Drawing, System.Web.Extensions, System.Speech -IgnoreWarnings -ErrorAction Stop; $built = $true }
 catch {
   $det = (@($Error) | Select-Object -First 6 | ForEach-Object { $_.ToString() }) -join "`r`n"
   if (-not $global:fallbackTried -and (Test-Path $goodFile)) {
