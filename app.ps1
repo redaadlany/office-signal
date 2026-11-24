@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.14'
+$global:appVersion = '2026-11-24.15'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -668,12 +668,6 @@ public class ChatForm : Form {
       if (App.Sharing) cm.Items.Add("Stop sharing my screen", null, delegate { App.StopShare(); });
       else cm.Items.Add("Share my screen (live)", null, delegate { StartLive(); });
       cm.Items.Add("Send a screenshot", null, delegate { SendScreenshot(); });
-      cm.Items.Add(new ToolStripSeparator());
-      if (App.MusicRole != null) cm.Items.Add("Stop the music", null, delegate { App.EndMusic(true); });
-      else {
-        cm.Items.Add("Share music from Chrome", null, delegate { App.OpenMusic("send"); });
-        cm.Items.Add("Listen to shared music", null, delegate { App.OpenMusic("listen"); });
-      }
       cm.Show(shotBtn, new Point(0, -cm.PreferredSize.Height));
     };
     jokeBtn.Click += delegate { App.Send(OsUi.JokeText, "joke"); App.PlayJoke(); FocusInput(); };
@@ -1058,7 +1052,8 @@ public static class MusicUi {
 public class MusicStrip : Form {
   OsApp app;
   Font f = new Font("Segoe UI", 9f);
-  RectangleF rPrev, rPlay, rNext, rVol, rBar, rClose;
+  RectangleF rPrev, rPlay, rNext, rVol, rBar, rClose, rShare, rListen;
+  Font fBtn = new Font("Segoe UI Semibold", 9f);
   ToolTip tip = new ToolTip();
   public MusicStrip(OsApp a) {
     app = a;
@@ -1070,7 +1065,7 @@ public class MusicStrip : Form {
   protected override bool ShowWithoutActivation { get { return true; } }
   public void Follow() {
     Form c = app.Chat;
-    bool want = app.MusicRole != null && c.Visible && c.WindowState != FormWindowState.Minimized;
+    bool want = c.Visible && c.WindowState != FormWindowState.Minimized;   // always there above Messages
     if (!want) { if (Visible) Hide(); return; }
     int h = 40, y = c.Top - h - 6;
     if (y < Screen.FromControl(c).WorkingArea.Top) y = c.Bottom + 6;
@@ -1085,6 +1080,24 @@ public class MusicStrip : Form {
     g.Clear(OsUi.PillBg);
     using (GraphicsPath p = OsUi.Round(new RectangleF(0.5f, 0.5f, w - 1, h - 1), 12)) using (Pen pn = new Pen(OsUi.Purple, 1f)) g.DrawPath(pn, p);
     MusicUi.Note(g, 12, cy, Color.FromArgb(167, 139, 250));
+    if (app.MusicRole == null) {   // nothing playing: Share and Listen buttons
+      rPrev = rPlay = rNext = rVol = rBar = rClose = RectangleF.Empty;
+      rShare = new RectangleF(w - 78, cy - 13, 68, 26);
+      bool offer = !string.IsNullOrEmpty(app.MusicOffer);
+      rListen = new RectangleF(rShare.X - 76, cy - 13, 70, 26);
+      string idle = offer ? app.MusicOffer + " is sharing music" : "Music";
+      TextRenderer.DrawText(g, idle, f, new Rectangle(38, 0, (int)rListen.X - 44, h), OsUi.PillInk, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+      Color pur = Color.FromArgb(127, 90, 240);
+      using (GraphicsPath bp = OsUi.Round(rShare, 13)) using (SolidBrush b = new SolidBrush(pur)) g.FillPath(b, bp);
+      TextRenderer.DrawText(g, "Share", fBtn, Rectangle.Round(rShare), Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+      using (GraphicsPath bp = OsUi.Round(rListen, 13)) {
+        if (offer) using (SolidBrush b = new SolidBrush(Color.FromArgb(0, 186, 124))) g.FillPath(b, bp);
+        else using (Pen pn = new Pen(Color.FromArgb(90, 95, 100), 1f)) g.DrawPath(pn, bp);
+      }
+      TextRenderer.DrawText(g, "Listen", fBtn, Rectangle.Round(rListen), offer ? Color.White : Color.FromArgb(139, 145, 150), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+      return;
+    }
+    rShare = rListen = RectangleF.Empty;
     rClose = new RectangleF(w - 34, cy - 12, 24, 24);
     rBar = new RectangleF(w - 100, cy - 2, 56, 4);
     rVol = new RectangleF(w - 126, cy - 12, 24, 24);
@@ -1102,6 +1115,7 @@ public class MusicStrip : Form {
   bool dragVol;
   protected override void OnMouseDown(MouseEventArgs e) {
     base.OnMouseDown(e);
+    if (app.MusicRole == null) return;
     RectangleF bar = rBar; bar.Inflate(4, 8);
     if (bar.Contains(e.Location)) { dragVol = true; SetVolAt(e.X); }
   }
@@ -1110,13 +1124,16 @@ public class MusicStrip : Form {
   protected override void OnMouseUp(MouseEventArgs e) {
     base.OnMouseUp(e);
     if (dragVol) { dragVol = false; return; }
+    if (rShare.Contains(e.Location)) { app.OpenMusic("send"); return; }
+    if (rListen.Contains(e.Location)) { app.OpenMusic("listen"); return; }
+    if (app.MusicRole == null) return;
     if (rPrev.Contains(e.Location)) app.MusicCmd("prev");
     else if (rPlay.Contains(e.Location)) app.MusicCmd("playpause");
     else if (rNext.Contains(e.Location)) app.MusicCmd("next");
     else if (rVol.Contains(e.Location)) app.SetMusicVol(app.MusicVol > 0 ? 0 : 80);
     else if (rClose.Contains(e.Location)) app.MusicCmd("stop");
   }
-  protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); app.SetMusicVol(app.MusicVol + (e.Delta > 0 ? 5 : -5)); }
+  protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); if (app.MusicRole != null) app.SetMusicVol(app.MusicVol + (e.Delta > 0 ? 5 : -5)); }
 }
 
 public class PillForm : Form {
@@ -1358,8 +1375,7 @@ public class OsApp : ApplicationContext {
         if (id == 5) { MusicCmd("playpause"); return; }
         string kd = id == 1 ? "red" : id == 2 ? "yellow" : "green";
         Send("", kd); Pill.ShowSent(kd);
-        if (!Pill.Visible) Pill.Show();
-        Pill.TopMost = true;
+        if (!ChatShown()) { if (!Pill.Visible) Pill.Show(); Pill.TopMost = true; }
       };
     } catch { }
     watch = new System.Windows.Forms.Timer(); watch.Interval = 500; watch.Tick += delegate { Watch(); }; watch.Start();
@@ -1492,6 +1508,7 @@ public class OsApp : ApplicationContext {
   public int MusicListeners;
   public int MusicVol = 80;
   public bool MusicPaused;
+  public string MusicOffer;           // name of the colleague sharing music right now (to show Listen)
   public bool MusicActive { get { return MusicRole != null && (MusicState == "on" || MusicState == "listening"); } }
   DateTime duckUntil = DateTime.MinValue, musicSeen = DateTime.MinValue;
   bool musicStop, musicAnnounced;
@@ -1514,6 +1531,13 @@ public class OsApp : ApplicationContext {
                 byte[] buf = new byte[4096]; int n = ns.Read(buf, 0, buf.Length);
                 string req = Encoding.ASCII.GetString(buf, 0, Math.Max(0, n));
                 string line = req.Split('\n')[0];
+                string path = ""; { string[] ws = line.Split(' '); if (ws.Length > 1) { path = ws[1]; int qq = path.IndexOf('?'); if (qq >= 0) path = path.Substring(0, qq); } }
+                if (path == "/music.html") {
+                  byte[] hb = File.Exists(MusicPage()) ? File.ReadAllBytes(MusicPage()) : new byte[0];
+                  byte[] hh = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: " + hb.Length + "\r\nConnection: close\r\n\r\n");
+                  ns.Write(hh, 0, hh.Length); ns.Write(hb, 0, hb.Length); continue;
+                }
+                if (path != "/ctl") { byte[] nf = Encoding.ASCII.GetBytes("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); ns.Write(nf, 0, nf.Length); continue; }
                 string q = ""; int qi = line.IndexOf('?'); if (qi >= 0) { int sp = line.IndexOf(' ', qi); q = line.Substring(qi + 1, (sp > qi ? sp : line.Length) - qi - 1); }
                 Dictionary<string, string> a2 = new Dictionary<string, string>();
                 foreach (string kv in q.Split('&')) { int e = kv.IndexOf('='); if (e > 0) a2[kv.Substring(0, e)] = Uri.UnescapeDataString(kv.Substring(e + 1)); }
@@ -1543,8 +1567,16 @@ public class OsApp : ApplicationContext {
       HideMusicWindow();
       if (MusicRole == "send" && !musicAnnounced) { musicAnnounced = true; Send("Sharing music - click the bar to listen", "music"); }
     }
+    if (st == "stopped" && MusicRole == "listen") MusicOffer = null;
     if (st == "stopped" && MusicRole != null && old != "stopped") { EndMusic(false); return; }
     if (old != st) RefreshMusicUi();
+  }
+  // the listener's Chrome window is hidden as soon as it appears
+  void HideSoon() {
+    int tries = 0;
+    System.Windows.Forms.Timer t = new System.Windows.Forms.Timer(); t.Interval = 150;
+    t.Tick += delegate { tries++; IntPtr w = OsNative.FindWindow(null, "Office Signal - Music"); if (w != IntPtr.Zero) { musicWnd = w; OsNative.ShowWindow(w, 0); } if ((w != IntPtr.Zero && tries > 20) || tries > 100 || MusicRole != "listen") { t.Stop(); t.Dispose(); } };
+    t.Start();
   }
   void HideMusicWindow() {
     if (musicWnd == IntPtr.Zero) musicWnd = OsNative.FindWindow(null, "Office Signal - Music");
@@ -1558,17 +1590,20 @@ public class OsApp : ApplicationContext {
     if (MusicRole != null) EndMusic(true);
     StartMusicServer();
     ThreadPool.QueueUserWorkItem(delegate {
-      if (!File.Exists(MusicPage()) || (DateTime.Now - File.GetLastWriteTime(MusicPage())).TotalMinutes > 30) FetchMusicPage();
+      FetchMusicPage();   // always the newest page (the old copy stays if the download fails)
       Ui(delegate {
         if (!File.Exists(MusicPage())) { MessageBox.Show(Chat, "The music page could not be downloaded. Check the internet and try again.", "Office Signal"); return; }
         string br = FindBrowser();
         if (br == null) { MessageBox.Show(Chat, "Google Chrome is needed to share music.", "Office Signal"); return; }
         musicSeen = DateTime.Now; MusicRole = role; MusicState = "wait"; MusicPaused = false; musicStop = false; musicAnnounced = false; musicWnd = IntPtr.Zero; MusicListeners = 0;
-        string url = "file:///" + MusicPage().Replace('\\', '/').Replace(" ", "%20") + "#role=" + role + "&topic=" + Uri.EscapeDataString(Topic) + "&name=" + Uri.EscapeDataString(Name) + "&port=" + musicPort + "&auto=1";
-        string args = "--app=\"" + url + "\" --window-size=380,480";
+        string url = (musicPort != 0 ? "http://127.0.0.1:" + musicPort + "/music.html" : "file:///" + MusicPage().Replace('\\', '/').Replace(" ", "%20")) + "#role=" + role + "&topic=" + Uri.EscapeDataString(Topic) + "&name=" + Uri.EscapeDataString(Name) + "&port=" + musicPort + "&auto=1";
+        Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+        string args = "--app=\"" + url + "\" --window-size=420,320";
+        if (role == "send") args += " --window-position=" + (wa.Left + (wa.Width - 420) / 2) + "," + (wa.Top + (wa.Height - 320) / 2);
         // the listener runs in its own small Chrome profile, where music may start without a click
-        if (role == "listen") args += " --user-data-dir=\"" + Path.Combine(cfgDir, "chrome") + "\" --autoplay-policy=no-user-gesture-required --no-first-run --no-default-browser-check";
+        if (role == "listen") args += " --user-data-dir=\"" + Path.Combine(cfgDir, "chrome") + "\" --autoplay-policy=no-user-gesture-required --no-first-run --no-default-browser-check --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --window-position=-4000,-4000";
         try { System.Diagnostics.Process.Start(br, args); } catch { }
+        if (role == "listen") HideSoon();
         RefreshMusicUi();
       });
     });
@@ -1600,7 +1635,7 @@ public class OsApp : ApplicationContext {
   }
   public void SetMusicVol(int v) { MusicVol = Math.Max(0, Math.Min(100, v)); RefreshMusicUi(); }
   void HandleMusicCtl(string c, string from) {
-    if (c == "stop") { if (MusicRole == "listen") EndMusic(true); ClearKind("music"); return; }
+    if (c == "stop") { MusicOffer = null; if (MusicRole == "listen") EndMusic(true); ClearKind("music"); RefreshMusicUi(); return; }
     if (MusicRole == "send") { if (c == "playpause") MusicPaused = !MusicPaused; PressMedia(c); RefreshMusicUi(); }
   }
   public void PlayJoke() { Duck(); if (VoiceOn) PlayFile("joke"); }
@@ -1617,18 +1652,19 @@ public class OsApp : ApplicationContext {
     else if (kind == "live") desc = from + " is sharing the screen";
     else desc = OsUi.KindLabel(kind) + " - " + from + ((text ?? "") != "" ? ": " + text : "");
     litText[kind] = desc;
-    if (!Pill.Visible) Pill.Show();
-    Pill.TopMost = true; Pill.Invalidate();
+    if (!ChatShown()) { if (!Pill.Visible) Pill.Show(); Pill.TopMost = true; }
+    Pill.Invalidate();
     blink.Start();
   }
+  public bool ChatShown() { return Chat != null && Chat.Visible && Chat.WindowState != FormWindowState.Minimized; }
   void Watch() {
     if (MusicRole != null) {
       double quiet = (DateTime.Now - musicSeen).TotalSeconds;
-      if (MusicState != "wait" && quiet > 75) EndMusic(false);
-      else if (MusicState == "wait" && musicSeen != DateTime.MinValue && quiet > 120) EndMusic(false);
+      if (MusicState != "wait" && quiet > 150) EndMusic(false);
+      else if (MusicState == "wait" && musicSeen != DateTime.MinValue && quiet > 180) EndMusic(false);
     }
     bool shown = Chat.Visible && Chat.WindowState != FormWindowState.Minimized;
-    bool wantPill = Lit.Count > 0 || !shown;
+    bool wantPill = !shown;
     if (wantPill && !Pill.Visible) { Pill.Show(); Pill.TopMost = true; }
     else if (!wantPill && Pill.Visible) Pill.Hide();
     if (ChatActive()) {
@@ -1869,7 +1905,7 @@ public class OsApp : ApplicationContext {
       Pill.Invalidate();
     } else if (live && !m.Mine) {
       if (m.Type == "joke") PlayJoke();
-      if (m.Type == "music") { StartAlert("music", m.Name, "", false); litText["music"] = m.Name + " is sharing music - click to listen"; Pill.Invalidate(); return; }
+      if (m.Type == "music") { MusicOffer = m.Name; if (Strip != null) Strip.Follow(); StartAlert("music", m.Name, "", false); litText["music"] = m.Name + " is sharing music - click to listen"; Pill.Invalidate(); return; }
       if (OsUi.IsSignal(m.Type)) StartAlert(m.Type, m.Name, m.Text);
       else if (!ChatActive()) { Unread++; StartAlert("msg", m.Name, m.Text, m.Type != "joke"); }
       Pill.Invalidate();
