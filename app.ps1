@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.5'
+$global:appVersion = '2026-11-24.6'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -1113,13 +1113,6 @@ public class PillForm : Form {
       TextRenderer.DrawText(g, title, fMid, Rectangle.Round(tr), ink, TextFormatFlags.Left | TextFormatFlags.Bottom | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
       string who = mine ? "Sent" : app.AlertFrom;
       if (who != "") TextRenderer.DrawText(g, who, fSmall, Rectangle.Round(fr), Color.FromArgb(220, ink), TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-    } else {
-      string[] kinds = { "msg", "red", "yellow", "green" };
-      float dx = 56, ds = 20;
-      for (int i = 0; i < kinds.Length; i++) {
-        RectangleF r = new RectangleF(dx + i * 30, cy - ds / 2, ds, ds);
-        using (Pen pn = new Pen(Color.FromArgb(74, 80, 86), 2f)) g.DrawEllipse(pn, r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2);
-      }
     }
     int ax = w - 46, ay = (h - 32) / 2;
     if (app.Other != "" && top == null) OsUi.DrawAvatar(g, app.Other, new RectangleF(ax, ay, 32, 32), bg, fAvatar);
