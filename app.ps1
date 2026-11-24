@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.2'
+$global:appVersion = '2026-11-24.3'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -1631,6 +1631,34 @@ if (Test-Path `$global:appCache) {
       $sl.IconLocation = "$($global:icoPath),0"; $sl.WindowStyle = 7; $sl.Description = 'Office Signal'
       $sl.Save()
     }
+    # show it like an installed app: Start menu (and Windows search) + Settings > Apps
+    try {
+      $sm = Join-Path ([Environment]::GetFolderPath('Programs')) 'Office Signal.lnk'
+      $ml = $sh.CreateShortcut($sm)
+      $ml.TargetPath = $stable; $ml.WorkingDirectory = $global:dir
+      $ml.IconLocation = "$($global:icoPath),0"; $ml.WindowStyle = 7; $ml.Description = 'Office Signal'
+      $ml.Save()
+      $un = Join-Path $global:dir 'uninstall.ps1'
+      $unText = @'
+$d = Join-Path $env:APPDATA 'OfficeSignal'
+try { ([System.Threading.EventWaitHandle]::OpenExisting('Local\OfficeSignalQuit')).Set() | Out-Null } catch {}
+Start-Sleep -Seconds 2
+foreach ($l in @((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Office Signal.lnk'), (Join-Path ([Environment]::GetFolderPath('Startup')) 'Office Signal.lnk'), (Join-Path ([Environment]::GetFolderPath('Programs')) 'Office Signal.lnk'))) { Remove-Item -LiteralPath $l -Force -ErrorAction SilentlyContinue }
+Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OfficeSignal' -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
+'@
+      [IO.File]::WriteAllText($un, $unText, (New-Object Text.UTF8Encoding $false))
+      $rk = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OfficeSignal'
+      New-Item -Path $rk -Force | Out-Null
+      Set-ItemProperty -Path $rk -Name DisplayName -Value 'Office Signal'
+      Set-ItemProperty -Path $rk -Name DisplayVersion -Value $global:appVersion
+      Set-ItemProperty -Path $rk -Name Publisher -Value 'Reda Adlany'
+      Set-ItemProperty -Path $rk -Name DisplayIcon -Value $global:icoPath
+      Set-ItemProperty -Path $rk -Name InstallLocation -Value $global:dir
+      Set-ItemProperty -Path $rk -Name UninstallString -Value ('powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $un + '"')
+      Set-ItemProperty -Path $rk -Name NoModify -Value 1 -Type DWord
+      Set-ItemProperty -Path $rk -Name NoRepair -Value 1 -Type DWord
+    } catch {}
   }
 } catch {}
 
