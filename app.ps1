@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.10'
+$global:appVersion = '2026-11-24.11'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -1277,29 +1277,29 @@ public class OsApp : ApplicationContext {
   public static int VoiceIndex(string kind) { if (kind == "red") return 0; if (kind == "yellow") return 1; if (kind == "green") return 2; if (kind == "msg") return 3; return -1; }
   // recorded voices (sounds\red.mp3, yellow.mp3, green.mp3), downloaded from GitHub once
   // change SoundsVer when the files in sounds/ on GitHub change, so both PCs download them again
-  const string SoundsVer = "2";
+  const string SoundsVer = "3";
   string SoundDir() { return Path.Combine(Path.Combine(cfgDir, "sounds"), SoundsVer); }
   public void FetchSounds() {
     ThreadPool.QueueUserWorkItem(delegate {
       foreach (string k in new string[] { "red", "yellow", "green", "msg" }) {
         try {
-          string f = Path.Combine(SoundDir(), k + ".mp3");
+          string f = Path.Combine(SoundDir(), k + ".wav");
           if (File.Exists(f) && new FileInfo(f).Length > 1000) continue;
           Directory.CreateDirectory(SoundDir());
-          using (WebClient wc = new WebClient()) { wc.DownloadFile("https://raw.githubusercontent.com/redaadlany/office-signal/main/sounds/" + k + ".mp3", f + ".tmp"); }
+          using (WebClient wc = new WebClient()) { wc.DownloadFile("https://raw.githubusercontent.com/redaadlany/office-signal/main/sounds/" + k + ".wav?v=" + SoundsVer, f + ".tmp"); }
           if (new FileInfo(f + ".tmp").Length > 1000) { if (File.Exists(f)) File.Delete(f); File.Move(f + ".tmp", f); } else File.Delete(f + ".tmp");
-        } catch { try { File.Delete(Path.Combine(SoundDir(), k + ".mp3.tmp")); } catch { } }
+        } catch { try { File.Delete(Path.Combine(SoundDir(), k + ".wav.tmp")); } catch { } }
       }
     });
   }
+  System.Media.SoundPlayer player;
   bool PlayFile(string kind) {
-    string f = Path.Combine(SoundDir(), kind + ".mp3");
+    string f = Path.Combine(SoundDir(), kind + ".wav");
     if (!File.Exists(f)) return false;
     try {
-      OsNative.mciSendString("close osv", null, 0, IntPtr.Zero);
-      if (OsNative.mciSendString("open \"" + f + "\" type mpegvideo alias osv", null, 0, IntPtr.Zero) != 0) return false;
-      OsNative.mciSendString("setaudio osv volume to 750", null, 0, IntPtr.Zero);
-      return OsNative.mciSendString("play osv", null, 0, IntPtr.Zero) == 0;
+      if (player != null) { player.Stop(); player.Dispose(); }
+      player = new System.Media.SoundPlayer(f); player.Load(); player.Play();
+      return true;
     } catch { return false; }
   }
   public void Speak(string kind, string from, bool test) {
