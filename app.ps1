@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.11'
+$global:appVersion = '2026-11-24.12'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -662,7 +662,7 @@ public class ChatForm : Form {
       cm.Items.Add("Send a screenshot", null, delegate { SendScreenshot(); });
       cm.Show(shotBtn, new Point(0, -cm.PreferredSize.Height));
     };
-    jokeBtn.Click += delegate { App.Send(OsUi.JokeText, "joke"); FocusInput(); };
+    jokeBtn.Click += delegate { App.Send(OsUi.JokeText, "joke"); App.PlayJoke(); FocusInput(); };
     bottom.Resize += delegate { LayoutBottom(); };
     Controls.Add(Head); Controls.Add(sig); Controls.Add(View); Controls.Add(bottom);
 
@@ -1281,7 +1281,7 @@ public class OsApp : ApplicationContext {
   string SoundDir() { return Path.Combine(Path.Combine(cfgDir, "sounds"), SoundsVer); }
   public void FetchSounds() {
     ThreadPool.QueueUserWorkItem(delegate {
-      foreach (string k in new string[] { "red", "yellow", "green", "msg" }) {
+      foreach (string k in new string[] { "red", "yellow", "green", "msg", "joke" }) {
         try {
           string f = Path.Combine(SoundDir(), k + ".wav");
           if (File.Exists(f) && new FileInfo(f).Length > 1000) continue;
@@ -1313,8 +1313,10 @@ public class OsApp : ApplicationContext {
       synth.SpeakAsyncCancelAll(); synth.SpeakAsync(t);
     } catch { }
   }
-  void StartAlert(string kind, string from, string text) {
-    Speak(kind, from, false);
+  public void PlayJoke() { if (VoiceOn) PlayFile("joke"); }
+  void StartAlert(string kind, string from, string text) { StartAlert(kind, from, text, true); }
+  void StartAlert(string kind, string from, string text, bool speak) {
+    if (speak) Speak(kind, from, false);
     Alert = kind; AlertFrom = from; AlertText = text ?? ""; BlinkOn = false;
     if (OsUi.IsSignal(kind)) { foreach (string o in new string[] { "red", "yellow", "green" }) { if (o != kind) { Lit.Remove(o); litText.Remove(o); litAt.Remove(o); } } }
     Lit.Add(kind);
@@ -1567,8 +1569,9 @@ public class OsApp : ApplicationContext {
       if (!ChatActive()) { Unread++; StartAlert("msg", m.Name, "sent a screenshot"); }
       Pill.Invalidate();
     } else if (live && !m.Mine) {
+      if (m.Type == "joke") PlayJoke();
       if (OsUi.IsSignal(m.Type)) StartAlert(m.Type, m.Name, m.Text);
-      else if (!ChatActive()) { Unread++; StartAlert("msg", m.Name, m.Text); }
+      else if (!ChatActive()) { Unread++; StartAlert("msg", m.Name, m.Text, m.Type != "joke"); }
       Pill.Invalidate();
     }
   }
