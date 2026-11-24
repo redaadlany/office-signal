@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.4'
+$global:appVersion = '2026-11-24.5'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -1014,11 +1014,19 @@ public class PillForm : Form {
   string[] miniKinds = { "red", "yellow", "green" };
   RectangleF[] miniRects = new RectangleF[3];
   string sentKind; DateTime sentAt;
+  // a signal I send: the whole bar blinks in its colour for 10 seconds
+  System.Windows.Forms.Timer sentBlink;
+  bool sentOn;
   public void ShowSent(string kd) {
-    sentKind = kd; sentAt = DateTime.Now; Invalidate();
-    System.Windows.Forms.Timer ft = new System.Windows.Forms.Timer(); ft.Interval = 3000;
-    ft.Tick += delegate { ft.Stop(); ft.Dispose(); sentKind = null; Invalidate(); };
-    ft.Start();
+    sentKind = kd; sentAt = DateTime.Now; sentOn = false; Invalidate();
+    if (sentBlink == null) {
+      sentBlink = new System.Windows.Forms.Timer(); sentBlink.Interval = 450;
+      sentBlink.Tick += delegate {
+        if (sentKind == null || (DateTime.Now - sentAt).TotalSeconds >= 10) { sentBlink.Stop(); sentKind = null; sentOn = false; Invalidate(); return; }
+        sentOn = !sentOn; TopMost = true; Invalidate();
+      };
+    }
+    sentBlink.Stop(); sentBlink.Start();
   }
   int MiniHit(Point p) { for (int i = 0; i < 3; i++) { RectangleF r = miniRects[i]; r.Inflate(4, 2); if (r.Contains(p)) return i; } return -1; }
   Point downPt, startLoc;
@@ -1084,8 +1092,9 @@ public class PillForm : Form {
     bool mine = false;
     if (top == null && sentKind != null) { top = sentKind; mine = true; }
     Color bg = OsUi.PillBg;
-    if (top != null) bg = (app.BlinkOn && !mine) ? OsUi.KindDark(top) : OsUi.KindColor(top);
-    Color ink = top == null ? OsUi.PillInk : (top == "yellow" && (mine || !app.BlinkOn) ? OsUi.KindText("yellow") : Color.White);
+    bool dark = mine ? sentOn : app.BlinkOn;
+    if (top != null) bg = dark ? OsUi.KindDark(top) : OsUi.KindColor(top);
+    Color ink = top == null ? OsUi.PillInk : (top == "yellow" && !dark ? OsUi.KindText("yellow") : Color.White);
     g.Clear(bg);
     using (GraphicsPath p = new GraphicsPath()) {
       p.AddArc(0, 0, h - 1, h - 1, 90, 180); p.AddArc(w - h, 0, h - 1, h - 1, 270, 180); p.CloseFigure();
