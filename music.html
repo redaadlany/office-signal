@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Office Signal - Music</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #16181c; color: #e7e9ea; font: 14px "Segoe UI", sans-serif; }
+  .wrap { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 20px; box-sizing: border-box; text-align: center; }
+  .disc { width: 84px; height: 84px; border-radius: 50%; background: #7f5af0; display: flex; align-items: center; justify-content: center; font-size: 38px; }
+  .disc.on { animation: spin 3s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h1 { font-size: 18px; font-weight: 600; margin: 0; }
+  .sub { color: #8b9196; font-size: 13px; max-width: 320px; line-height: 1.5; }
+  button { border: 0; border-radius: 22px; padding: 11px 26px; font: 600 14px "Segoe UI", sans-serif; cursor: pointer; background: #7f5af0; color: #fff; }
+  button.stop { background: #2a2d31; color: #f4212e; }
+  button:disabled { opacity: .5; cursor: default; }
+  .bars { display: flex; gap: 3px; height: 26px; align-items: flex-end; }
+  .bars i { width: 5px; background: #a78bfa; border-radius: 2px; height: 4px; transition: height .08s; }
+  input[type=range] { width: 200px; accent-color: #a78bfa; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="disc" id="disc">&#127925;</div>
+  <h1 id="title">Music</h1>
+  <div class="sub" id="sub"></div>
+  <div class="bars" id="bars"></div>
+  <div id="vol" style="display:none">&#128264; <input type="range" id="volume" min="0" max="100" value="80"></div>
+  <button id="go"></button>
+  <button id="stop" class="stop" style="display:none">Stop</button>
+  <audio id="player" autoplay></audio>
+</div>
+<script>
+// Settings come in the link: #role=send|listen&topic=...&name=...
+var P = {};
+location.hash.replace(/^#/, '').split('&').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) P[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); });
+var ROLE = P.role === 'send' ? 'send' : 'listen';
+var NAME = P.name || 'Me';
+var SERVER = 'https://ntfy.sh/';
+var TOPIC = (P.topic || '') + 'm';           // a separate channel for music, next to the messages channel
+var ME = Math.random().toString(36).slice(2, 10);
+var ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+
+var $ = function (id) { return document.getElementById(id); };
+var bars = []; for (var b = 0; b < 16; b++) { var e = document.createElement('i'); $('bars').appendChild(e); bars.push(e); }
+
+function post(obj) {
+  obj.from = ME; obj.name = NAME; obj.t = Date.now();
+  return fetch(SERVER + TOPIC, { method: 'POST', body: JSON.stringify(obj) }).catch(function () { });
+}
+function listen(onMsg) {
+  var es = new EventSource(SERVER + TOPIC + '/sse?since=' + Math.floor(Date.now() / 1000 - 5));
+  es.onmessage = function (ev) {
+    try { var d = JSON.parse(ev.data); var m = JSON.parse(d.message); if (m.from !== ME && Date.now() - m.t < 60000) onMsg(m); } catch (e) { }
+  };
+  return es;
+}
+function meter(stream) {
+  try {
+    var ac = new AudioContext(), an = ac.createAnalyser(); an.fftSize = 64;
+    ac.createMediaStreamSource(stream).connect(an);
+    var data = new Uint8Array(an.frequencyBinCount);
+    (function loop() { an.getByteFrequencyData(data); for (var i = 0; i < bars.length; i++) bars[i].style.height = (4 + data[i + 1] / 255 * 22) + 'px'; requestAnimationFrame(loop); })();
+  } catch (e) { }
+}
+function setState(title, sub, on) { $('title').textContent = title; $('sub').textContent = sub; $('disc').className = 'disc' + (on ? ' on' : ''); }
+
+// ------------------------------------------------------------------ the one who shares
+if (ROLE === 'send') {
+  var stream = null, peers = {};
+  setState('Share music', 'Click Share, pick the Chrome tab that plays the music and tick "Share tab audio".', false);
+  $('go').textContent = 'Share';
+  function connect(to) {
+    if (!stream || peers[to]) return;
+    var pc = new RTCPeerConnection(ICE); peers[to] = pc;
+    stream.getAudioTracks().forEach(function (t) { pc.addTrack(t, stream); });
+    pc.onicecandidate = function (e) { if (e.candidate) post({ kind: 'ice', to: to, c: e.candidate }); };
+    pc.onconnectionstatechange = function () {
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') { try { pc.close(); } catch (e) { } delete peers[to]; }
+      updateCount();
+    };
+    pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).then(function () { post({ kind: 'offer', to: to, sdp: pc.localDescription }); });
+  }
+  function updateCount() {
+    var n = 0; for (var k in peers) if (peers[k].connectionState === 'connected') n++;
+    setState('Sharing music', n ? n + ' listening now' : 'Waiting for your colleague to click Listen...', true);
+  }
+  listen(function (m) {
+    if (m.kind === 'hello') connect(m.from);
+    else if (m.to === ME && peers[m.from]) {
+      if (m.kind === 'answer') peers[m.from].setRemoteDescription(m.sdp);
+      else if (m.kind === 'ice') peers[m.from].addIceCandidate(m.c).catch(function () { });
+    } else if (m.kind === 'bye' && peers[m.from]) { try { peers[m.from].close(); } catch (e) { } delete peers[m.from]; updateCount(); }
+  });
+  $('go').onclick = function () {
+    navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, preferCurrentTab: false, selfBrowserSurface: 'exclude', systemAudio: 'include' })
+      .then(function (s) {
+        if (!s.getAudioTracks().length) { s.getTracks().forEach(function (t) { t.stop(); }); setState('No sound in this share', 'Pick a Chrome tab and tick "Share tab audio", then try again.', false); return; }
+        s.getVideoTracks().forEach(function (t) { t.stop(); });          // only the sound is sent
+        stream = new MediaStream(s.getAudioTracks());
+        stream.getAudioTracks()[0].onended = stopAll;
+        meter(stream);
+        $('go').style.display = 'none'; $('stop').style.display = '';
+        updateCount();
+        post({ kind: 'start' });
+      })
+      .catch(function () { setState('Share music', 'Sharing was cancelled. Click Share to try again.', false); });
+  };
+  function stopAll() {
+    for (var k in peers) { try { peers[k].close(); } catch (e) { } }
+    peers = {};
+    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+    stream = null;
+    post({ kind: 'stop' });
+    $('stop').style.display = 'none'; $('go').style.display = '';
+    setState('Share music', 'Stopped. Click Share to share again.', false);
+  }
+  $('stop').onclick = stopAll;
+  window.addEventListener('beforeunload', function () { if (stream) navigator.sendBeacon(SERVER + TOPIC, JSON.stringify({ kind: 'stop', from: ME, name: NAME, t: Date.now() })); });
+}
+
+// ------------------------------------------------------------------ the one who listens
+else {
+  var pc = null, host = null, es = null;
+  setState('Listen together', 'Click Listen to hear the music your colleague is sharing.', false);
+  $('go').textContent = 'Listen';
+  function hello() { post({ kind: 'hello' }); }
+  $('go').onclick = function () {
+    $('player').play().catch(function () { });   // unlock sound with this click
+    $('go').style.display = 'none'; $('stop').style.display = '';
+    setState('Connecting...', 'Waiting for the music.', false);
+    es = listen(function (m) {
+      if (m.kind === 'start') { setTimeout(hello, 300); return; }
+      if (m.kind === 'stop') { if (pc) { pc.close(); pc = null; } $('player').srcObject = null; setState('Music stopped', (m.name || 'Your colleague') + ' stopped sharing.', false); return; }
+      if (m.to !== ME) return;
+      if (m.kind === 'offer') {
+        if (pc) { try { pc.close(); } catch (e) { } }
+        host = m.from; pc = new RTCPeerConnection(ICE);
+        pc.onicecandidate = function (e) { if (e.candidate) post({ kind: 'ice', to: host, c: e.candidate }); };
+        pc.ontrack = function (e) {
+          var s = e.streams[0] || new MediaStream([e.track]);
+          $('player').srcObject = s; $('player').volume = $('volume').value / 100; $('player').play().catch(function () { });
+          meter(s); $('vol').style.display = '';
+          setState('Listening', 'Music from ' + (m.name || 'your colleague'), true);
+        };
+        pc.onconnectionstatechange = function () { if (pc && pc.connectionState === 'failed') setState('Could not connect', 'Your networks block the connection. Try on the same Wi-Fi.', false); };
+        pc.setRemoteDescription(m.sdp).then(function () { return pc.createAnswer(); }).then(function (a) { return pc.setLocalDescription(a); })
+          .then(function () { post({ kind: 'answer', to: host, sdp: pc.localDescription }); });
+      } else if (m.kind === 'ice' && pc && m.from === host) pc.addIceCandidate(m.c).catch(function () { });
+    });
+    setTimeout(hello, 800);
+  };
+  $('volume').oninput = function () { $('player').volume = this.value / 100; };
+  $('stop').onclick = function () {
+    if (pc) { pc.close(); pc = null; } if (es) es.close();
+    if (host) post({ kind: 'bye', to: host });
+    $('player').srcObject = null;
+    $('stop').style.display = 'none'; $('vol').style.display = 'none'; $('go').style.display = '';
+    setState('Listen together', 'Click Listen to hear the music again.', false);
+  };
+}
+</script>
+</body>
+</html>

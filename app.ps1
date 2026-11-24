@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.12'
+$global:appVersion = '2026-11-24.13'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -242,8 +242,9 @@ public static class OsUi {
   }
   public static bool IsSignal(string k) { return k == "red" || k == "yellow" || k == "green"; }
   public static bool IsChip(string k) { return IsSignal(k) || k == "live" || k == "livestop"; }
-  public static Color KindColor(string k) { if (k == "red") return Red; if (k == "yellow") return Yellow; if (k == "msg" || k == "live") return Blue; if (k == "livestop") return Bubble; return Green; }
-  public static Color KindDark(string k) { if (k == "red") return Color.FromArgb(122, 0, 0); if (k == "yellow") return Color.FromArgb(122, 96, 0); if (k == "msg" || k == "live") return Color.FromArgb(11, 79, 128); return Color.FromArgb(0, 84, 56); }
+  public static Color Purple = Color.FromArgb(127, 90, 240);
+  public static Color KindColor(string k) { if (k == "music") return Purple; if (k == "red") return Red; if (k == "yellow") return Yellow; if (k == "msg" || k == "live") return Blue; if (k == "livestop") return Bubble; return Green; }
+  public static Color KindDark(string k) { if (k == "music") return Color.FromArgb(58, 36, 128); if (k == "red") return Color.FromArgb(122, 0, 0); if (k == "yellow") return Color.FromArgb(122, 96, 0); if (k == "msg" || k == "live") return Color.FromArgb(11, 79, 128); return Color.FromArgb(0, 84, 56); }
   public static Color KindText(string k) { if (k == "livestop") return Ink; return k == "yellow" ? DarkText : Color.White; }
   public static string KindLabel(string k) { if (k == "red") return "Emergency"; if (k == "yellow") return "Come please"; return "Call off - break"; }
   public static Color AvatarColor(string s) {
@@ -660,6 +661,9 @@ public class ChatForm : Form {
       if (App.Sharing) cm.Items.Add("Stop sharing my screen", null, delegate { App.StopShare(); });
       else cm.Items.Add("Share my screen (live)", null, delegate { StartLive(); });
       cm.Items.Add("Send a screenshot", null, delegate { SendScreenshot(); });
+      cm.Items.Add(new ToolStripSeparator());
+      cm.Items.Add("Share music from Chrome", null, delegate { App.OpenMusic("send"); });
+      cm.Items.Add("Listen to shared music", null, delegate { App.OpenMusic("listen"); });
       cm.Show(shotBtn, new Point(0, -cm.PreferredSize.Height));
     };
     jokeBtn.Click += delegate { App.Send(OsUi.JokeText, "joke"); App.PlayJoke(); FocusInput(); };
@@ -1101,7 +1105,7 @@ public class PillForm : Form {
     int w = Width, h = Height;
     // the strongest lit signal colours the whole bar
     string top = null;
-    foreach (string k in new string[] { "red", "yellow", "green", "live", "msg" }) { if (app.Lit.Contains(k)) { top = k; break; } }
+    foreach (string k in new string[] { "red", "yellow", "green", "live", "music", "msg" }) { if (app.Lit.Contains(k)) { top = k; break; } }
     bool mine = false;
     if (top == null && sentKind != null) { top = sentKind; mine = true; }
     Color bg = OsUi.PillBg;
@@ -1120,7 +1124,7 @@ public class PillForm : Form {
     }
     if (top != null) {
       // the signal name in big letters, and who sent it
-      string title = top == "msg" ? "New message" : top == "live" ? "Screen share" : OsUi.KindLabel(top);
+      string title = top == "msg" ? "New message" : top == "live" ? "Screen share" : top == "music" ? "Music - click to listen" : OsUi.KindLabel(top);
       RectangleF tr = new RectangleF(48, 6, w - 48 - 80, h / 2f);
       RectangleF fr = new RectangleF(48, h / 2f - 1, w - 48 - 80, h / 2f - 5);
       TextRenderer.DrawText(g, title, fMid, Rectangle.Round(tr), ink, TextFormatFlags.Left | TextFormatFlags.Bottom | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
@@ -1212,7 +1216,7 @@ public class OsApp : ApplicationContext {
     blink.Tick += delegate {
       BlinkOn = !BlinkOn;
       List<string> old = new List<string>();
-      foreach (KeyValuePair<string, DateTime> kv in litAt) if ((DateTime.Now - kv.Value).TotalSeconds > LitSeconds) old.Add(kv.Key);
+      foreach (KeyValuePair<string, DateTime> kv in litAt) if ((DateTime.Now - kv.Value).TotalSeconds > (kv.Key == "music" ? 60 : LitSeconds)) old.Add(kv.Key);
       foreach (string k in old) ClearKind(k);
       Pill.TopMost = true; Pill.Invalidate();
     };
@@ -1312,6 +1316,36 @@ public class OsApp : ApplicationContext {
       if (synth == null) { synth = new System.Speech.Synthesis.SpeechSynthesizer(); synth.Volume = 70; synth.Rate = 0; }
       synth.SpeakAsyncCancelAll(); synth.SpeakAsync(t);
     } catch { }
+  }
+  // ---- music from Chrome: a small page (music.html) shares a tab's sound with WebRTC ----
+  string MusicPage() { return Path.Combine(cfgDir, "music.html"); }
+  void FetchMusicPage() {
+    try {
+      using (WebClient wc = new WebClient()) { wc.Encoding = Encoding.UTF8; string h = wc.DownloadString("https://raw.githubusercontent.com/redaadlany/office-signal/main/music.html?t=" + DateTime.UtcNow.Ticks); if (h.Contains("Office Signal - Music")) File.WriteAllText(MusicPage(), h, new UTF8Encoding(false)); }
+    } catch { }
+  }
+  static string FindBrowser() {
+    string[] c = {
+      Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Google\Chrome\Application\chrome.exe"),
+      Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Google\Chrome\Application\chrome.exe"),
+      Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Google\Chrome\Application\chrome.exe"),
+      Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Microsoft\Edge\Application\msedge.exe"),
+      Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Microsoft\Edge\Application\msedge.exe") };
+    foreach (string f in c) if (File.Exists(f)) return f;
+    return null;
+  }
+  public void OpenMusic(string role) {
+    ThreadPool.QueueUserWorkItem(delegate {
+      if (!File.Exists(MusicPage()) || (DateTime.Now - File.GetLastWriteTime(MusicPage())).TotalMinutes > 30) FetchMusicPage();
+      Ui(delegate {
+        if (!File.Exists(MusicPage())) { MessageBox.Show(Chat, "The music page could not be downloaded. Check the internet and try again.", "Office Signal"); return; }
+        string br = FindBrowser();
+        if (br == null) { MessageBox.Show(Chat, "Google Chrome is needed to share music.", "Office Signal"); return; }
+        string url = "file:///" + MusicPage().Replace('\\', '/').Replace(" ", "%20") + "#role=" + role + "&topic=" + Uri.EscapeDataString(Topic) + "&name=" + Uri.EscapeDataString(Name);
+        try { System.Diagnostics.Process.Start(br, "--app=\"" + url + "\" --window-size=380,480"); } catch { }
+        if (role == "send") Send("Sharing music from Chrome - click the bar to listen", "music");
+      });
+    });
   }
   public void PlayJoke() { if (VoiceOn) PlayFile("joke"); }
   void StartAlert(string kind, string from, string text) { StartAlert(kind, from, text, true); }
@@ -1437,6 +1471,7 @@ public class OsApp : ApplicationContext {
     viewer.Show(); viewer.Activate();
   }
   public void PillClicked() {
+    if (Lit.Contains("music") && !Lit.Contains("red") && !Lit.Contains("yellow") && !Lit.Contains("green")) { ClearKind("music"); OpenMusic("listen"); return; }
     if (Lit.Contains("live") && !Lit.Contains("red") && !Lit.Contains("yellow") && !Lit.Contains("green")) {
       string who = litText["live"].Replace(" is sharing the screen", ""); ClearAlert(); OpenViewer(who); return;
     }
@@ -1570,6 +1605,7 @@ public class OsApp : ApplicationContext {
       Pill.Invalidate();
     } else if (live && !m.Mine) {
       if (m.Type == "joke") PlayJoke();
+      if (m.Type == "music") { StartAlert("music", m.Name, "", false); litText["music"] = m.Name + " is sharing music - click to listen"; Pill.Invalidate(); return; }
       if (OsUi.IsSignal(m.Type)) StartAlert(m.Type, m.Name, m.Text);
       else if (!ChatActive()) { Unread++; StartAlert("msg", m.Name, m.Text, m.Type != "joke"); }
       Pill.Invalidate();
