@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.1'
+$global:appVersion = '2026-11-24.2'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -88,21 +88,98 @@ public static class OsNative {
   public static void Drag(Form f) { ReleaseCapture(); SendMessage(f.Handle, 0xA1, (IntPtr)2, IntPtr.Zero); }
 }
 
-// Keyboard shortcuts that work from any app: Ctrl+Alt+1 Emergency, Ctrl+Alt+2 Come, Ctrl+Alt+3 Call off, Ctrl+Alt+M Messages
+// Keyboard shortcuts that work from any app (changed in Settings, saved in keys.txt)
 public class OsHotkeys : NativeWindow, IDisposable {
   public event Action<int> Pressed;
+  public static string[] Names = { "Emergency", "Come please", "Call off", "Open Messages" };
+  public static uint[] DefMods = { 3, 3, 3, 3 };              // Ctrl + Alt
+  public static uint[] DefVk = { 0x31, 0x32, 0x33, 0x4D };    // 1, 2, 3, M
+  public uint[] Mods = new uint[4], Vk = new uint[4];
   public List<string> Failed = new List<string>();
-  public OsHotkeys() {
+  string file;
+  public OsHotkeys(string cfgDir) {
+    file = Path.Combine(cfgDir, "keys.txt");
     CreateHandle(new CreateParams());
-    uint mods = 0x0002 | 0x0001 | 0x4000; // Ctrl + Alt, no auto-repeat
-    Reg(1, mods, 0x31, "Ctrl+Alt+1"); Reg(2, mods, 0x32, "Ctrl+Alt+2"); Reg(3, mods, 0x33, "Ctrl+Alt+3"); Reg(4, mods, 0x4D, "Ctrl+Alt+M");
+    for (int i = 0; i < 4; i++) { Mods[i] = DefMods[i]; Vk[i] = DefVk[i]; }
+    try {
+      if (File.Exists(file)) {
+        string[] l = File.ReadAllLines(file);
+        for (int i = 0; i < 4 && i < l.Length; i++) { string[] q = l[i].Split(','); Mods[i] = uint.Parse(q[0]); Vk[i] = uint.Parse(q[1]); }
+      }
+    } catch { }
+    Apply();
   }
-  void Reg(int id, uint mods, uint vk, string name) { if (!OsNative.RegisterHotKey(Handle, id, mods, vk)) Failed.Add(name); }
+  public void Apply() {
+    Failed.Clear();
+    for (int i = 0; i < 4; i++) {
+      OsNative.UnregisterHotKey(Handle, i + 1);
+      if (Vk[i] == 0) continue;
+      if (!OsNative.RegisterHotKey(Handle, i + 1, Mods[i] | 0x4000, Vk[i])) Failed.Add(Label(Mods[i], Vk[i]));
+    }
+  }
+  public void Set(int i, uint mods, uint vk) {
+    Mods[i] = mods; Vk[i] = vk; Apply();
+    try { string[] l = new string[4]; for (int k = 0; k < 4; k++) l[k] = Mods[k] + "," + Vk[k]; File.WriteAllLines(file, l); } catch { }
+  }
+  public void Reset() { for (int i = 0; i < 4; i++) Set(i, DefMods[i], DefVk[i]); }
+  public static string Label(uint mods, uint vk) {
+    if (vk == 0) return "None";
+    List<string> p = new List<string>();
+    if ((mods & 2) != 0) p.Add("Ctrl"); if ((mods & 1) != 0) p.Add("Alt"); if ((mods & 4) != 0) p.Add("Shift"); if ((mods & 8) != 0) p.Add("Win");
+    Keys k = (Keys)vk; string n = k.ToString();
+    if (k >= Keys.D0 && k <= Keys.D9) n = ((int)k - (int)Keys.D0).ToString();
+    else if (k >= Keys.NumPad0 && k <= Keys.NumPad9) n = "Num " + ((int)k - (int)Keys.NumPad0);
+    p.Add(n);
+    return string.Join(" + ", p.ToArray());
+  }
   protected override void WndProc(ref Message m) {
     if (m.Msg == 0x0312 && Pressed != null) { int id = m.WParam.ToInt32(); Pressed(id); }
     base.WndProc(ref m);
   }
   public void Dispose() { try { for (int i = 1; i <= 4; i++) OsNative.UnregisterHotKey(Handle, i); DestroyHandle(); } catch { } }
+}
+
+// A box that records a shortcut: click it, then press the keys
+public class KeyBox : Control {
+  public int Index; public bool Recording;
+  public event EventHandler Changed;
+  public uint Mods, Vk;
+  Font f = new Font("Segoe UI Semibold", 10f);
+  public KeyBox() {
+    SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+    Cursor = Cursors.Hand; TabStop = true;
+  }
+  protected override void OnClick(EventArgs e) { base.OnClick(e); Recording = true; Focus(); Invalidate(); }
+  protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Recording = false; Invalidate(); }
+  protected override bool IsInputKey(Keys k) { return true; }
+  protected override bool ProcessCmdKey(ref Message msg, Keys keyData) {
+    if (!Recording) return base.ProcessCmdKey(ref msg, keyData);
+    Keys k = keyData & Keys.KeyCode;
+    if (k == Keys.ControlKey || k == Keys.ShiftKey || k == Keys.Menu || k == Keys.LWin || k == Keys.RWin) return true;
+    if (k == Keys.Escape) { Recording = false; Invalidate(); return true; }
+    uint mods = 0;
+    if ((keyData & Keys.Control) != 0) mods |= 2; if ((keyData & Keys.Alt) != 0) mods |= 1; if ((keyData & Keys.Shift) != 0) mods |= 4;
+    if (Control.ModifierKeys.HasFlag(Keys.LWin)) mods |= 8;
+    if ((k == Keys.Back || k == Keys.Delete) && mods == 0) { Mods = 0; Vk = 0; }
+    else {
+      bool alone = (k >= Keys.F1 && k <= Keys.F24) || (k >= Keys.NumPad0 && k <= Keys.NumPad9);
+      if (mods == 0 && !alone) { Recording = true; Text = "Add Ctrl or Alt (or use F1-F12)"; Invalidate(); return true; }
+      Mods = mods; Vk = (uint)k;
+    }
+    Recording = false; Text = ""; Invalidate();
+    if (Changed != null) Changed(this, EventArgs.Empty);
+    return true;
+  }
+  protected override void OnPaint(PaintEventArgs e) {
+    Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.Clear(Parent != null ? Parent.BackColor : OsUi.Bg);
+    Color border = Recording ? OsUi.Blue : OsUi.Line;
+    using (GraphicsPath p = OsUi.Round(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 9)) {
+      using (SolidBrush b = new SolidBrush(OsUi.Box)) g.FillPath(b, p);
+      using (Pen pn = new Pen(border, Recording ? 1.6f : 1f)) g.DrawPath(pn, p);
+    }
+    string t = Recording ? (Text != "" ? Text : "Press the keys...") : OsHotkeys.Label(Mods, Vk);
+    TextRenderer.DrawText(g, t, f, ClientRectangle, Recording ? OsUi.Blue : OsUi.Ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+  }
 }
 
 public static class OsUi {
@@ -695,6 +772,8 @@ public class SettingsView : Control {
   Font fLbl = new Font("Segoe UI", 9f);
   Font fSeg = new Font("Segoe UI Semibold", 10f);
   Rectangle segRect;
+  KeyBox[] kb = new KeyBox[4];
+  Label resetKeys;
   public SettingsView(ChatForm f) {
     SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     form = f; BackColor = OsUi.Bg; Cursor = Cursors.Default;
@@ -705,12 +784,30 @@ public class SettingsView : Control {
     close.Click += delegate { Visible = false; form.FocusInput(); };
     save.Click += delegate { form.App.SetName(nameBox.Text); Visible = false; form.FocusInput(); };
     nameBox.KeyDown += delegate(object o, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; form.App.SetName(nameBox.Text); Visible = false; form.FocusInput(); } };
+    for (int i = 0; i < 4; i++) {
+      KeyBox k = new KeyBox(); k.Index = i; kb[i] = k; Controls.Add(k);
+      k.Changed += delegate(object o, EventArgs e) {
+        KeyBox s2 = (KeyBox)o;
+        if (form.App.keys == null) return;
+        form.App.keys.Set(s2.Index, s2.Mods, s2.Vk);
+        if (form.App.keys.Failed.Count > 0) MessageBox.Show(form, OsHotkeys.Label(s2.Mods, s2.Vk) + " is already used by another app. Choose another one.", "Office Signal");
+        LoadKeys();
+      };
+    }
+    resetKeys = new Label(); resetKeys.Text = "Reset shortcuts"; resetKeys.AutoSize = true; resetKeys.Cursor = Cursors.Hand; resetKeys.Font = new Font("Segoe UI", 9f, FontStyle.Underline);
+    resetKeys.Click += delegate { if (form.App.keys != null) { form.App.keys.Reset(); LoadKeys(); } };
+    Controls.Add(resetKeys);
     ApplyTheme();
   }
-  public void Open() { nameBox.Text = form.App.Name; Visible = true; BringToFront(); nameBox.Focus(); nameBox.SelectAll(); }
+  void LoadKeys() {
+    OsHotkeys h = form.App.keys;
+    for (int i = 0; i < 4; i++) { kb[i].Mods = h != null ? h.Mods[i] : OsHotkeys.DefMods[i]; kb[i].Vk = h != null ? h.Vk[i] : OsHotkeys.DefVk[i]; kb[i].Invalidate(); }
+  }
+  public void Open() { nameBox.Text = form.App.Name; LoadKeys(); Visible = true; BringToFront(); nameBox.Focus(); nameBox.SelectAll(); }
   public void ApplyTheme() {
     BackColor = OsUi.Bg; close.BackColor = OsUi.Bg; save.BackColor = OsUi.Bg;
     nameBox.BackColor = OsUi.Box; nameBox.ForeColor = OsUi.Ink;
+    if (resetKeys != null) { resetKeys.BackColor = OsUi.Bg; resetKeys.ForeColor = OsUi.Blue; }
     Invalidate(true);
   }
   protected override void OnResize(EventArgs e) {
@@ -719,6 +816,8 @@ public class SettingsView : Control {
     segRect = new Rectangle(16, 112, Width - 32, 40);
     nameBox.Bounds = new Rectangle(30, 200 + (44 - nameBox.PreferredHeight) / 2, Width - 60, nameBox.PreferredHeight);
     save.Bounds = new Rectangle(16, 262, Width - 32, 42);
+    for (int i = 0; i < 4; i++) if (kb[i] != null) kb[i].Bounds = new Rectangle(Width - 16 - 190, 356 + i * 44, 190, 36);
+    if (resetKeys != null) resetKeys.Location = new Point(16, 356 + 4 * 44 + 4);
   }
   protected override void OnMouseDown(MouseEventArgs e) {
     base.OnMouseDown(e);
@@ -744,6 +843,13 @@ public class SettingsView : Control {
     TextRenderer.DrawText(g, "Light", fSeg, right, OsUi.Light ? Color.White : OsUi.Ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
     TextRenderer.DrawText(g, "Your name", fLbl, new Point(16, 176), OsUi.Mute);
     using (GraphicsPath p = OsUi.Round(new RectangleF(16, 200, Width - 32, 44), 10)) using (SolidBrush b = new SolidBrush(OsUi.Box)) g.FillPath(b, p);
+    TextRenderer.DrawText(g, "Shortcuts (click a box, then press the keys)", fLbl, new Point(16, 328), OsUi.Mute);
+    Color[] dots = { OsUi.Red, OsUi.Yellow, OsUi.Green, OsUi.Blue };
+    for (int i = 0; i < 4; i++) {
+      int y = 356 + i * 44;
+      using (SolidBrush b = new SolidBrush(dots[i])) g.FillEllipse(b, 18, y + 13, 10, 10);
+      TextRenderer.DrawText(g, OsHotkeys.Names[i], fSeg, new Rectangle(38, y, Width - 260, 36), OsUi.Ink, TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+    }
   }
 }
 
@@ -1033,7 +1139,7 @@ public class OsApp : ApplicationContext {
   public Icon AppIcon;
   NotifyIcon tray;
   System.Windows.Forms.Timer watch, blink;
-  OsHotkeys keys;
+  public OsHotkeys keys;
   HashSet<string> seenKeys = new HashSet<string>();
   Dictionary<string, bool> conn = new Dictionary<string, bool>();
   public string Alert;
@@ -1071,12 +1177,12 @@ public class OsApp : ApplicationContext {
     tray = new NotifyIcon();
     tray.Icon = OsUi.MakeIcon(32); tray.Text = "Office Signal"; tray.Visible = true;
     ContextMenuStrip menu = new ContextMenuStrip();
-    menu.Items.Add("Open Messages   (Ctrl+Alt+M)", null, delegate { ShowChat(); });
+    menu.Items.Add("Open Messages", null, delegate { ShowChat(); });
     menu.Items.Add("Quit", null, delegate { Shutdown(); });
     tray.ContextMenuStrip = menu;
     tray.DoubleClick += delegate { ShowChat(); };
     try {
-      keys = new OsHotkeys();
+      keys = new OsHotkeys(cfgDir);
       keys.Pressed += delegate(int id) {
         if (id == 4) { ShowChat(); return; }
         string kd = id == 1 ? "red" : id == 2 ? "yellow" : "green";
