@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-23.1'
+$global:appVersion = '2026-11-24.1'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -83,7 +83,26 @@ public static class OsNative {
   [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr h);
   [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
   [DllImport("gdi32.dll")] public static extern int GetDeviceCaps(IntPtr dc, int index);
+  [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
+  [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h, int id);
   public static void Drag(Form f) { ReleaseCapture(); SendMessage(f.Handle, 0xA1, (IntPtr)2, IntPtr.Zero); }
+}
+
+// Keyboard shortcuts that work from any app: Ctrl+Alt+1 Emergency, Ctrl+Alt+2 Come, Ctrl+Alt+3 Call off, Ctrl+Alt+M Messages
+public class OsHotkeys : NativeWindow, IDisposable {
+  public event Action<int> Pressed;
+  public List<string> Failed = new List<string>();
+  public OsHotkeys() {
+    CreateHandle(new CreateParams());
+    uint mods = 0x0002 | 0x0001 | 0x4000; // Ctrl + Alt, no auto-repeat
+    Reg(1, mods, 0x31, "Ctrl+Alt+1"); Reg(2, mods, 0x32, "Ctrl+Alt+2"); Reg(3, mods, 0x33, "Ctrl+Alt+3"); Reg(4, mods, 0x4D, "Ctrl+Alt+M");
+  }
+  void Reg(int id, uint mods, uint vk, string name) { if (!OsNative.RegisterHotKey(Handle, id, mods, vk)) Failed.Add(name); }
+  protected override void WndProc(ref Message m) {
+    if (m.Msg == 0x0312 && Pressed != null) { int id = m.WParam.ToInt32(); Pressed(id); }
+    base.WndProc(ref m);
+  }
+  public void Dispose() { try { for (int i = 1; i <= 4; i++) OsNative.UnregisterHotKey(Handle, i); DestroyHandle(); } catch { } }
 }
 
 public static class OsUi {
@@ -889,6 +908,12 @@ public class PillForm : Form {
   string[] miniKinds = { "red", "yellow", "green" };
   RectangleF[] miniRects = new RectangleF[3];
   string sentKind; DateTime sentAt;
+  public void ShowSent(string kd) {
+    sentKind = kd; sentAt = DateTime.Now; Invalidate();
+    System.Windows.Forms.Timer ft = new System.Windows.Forms.Timer(); ft.Interval = 1200;
+    ft.Tick += delegate { ft.Stop(); ft.Dispose(); sentKind = null; Invalidate(); };
+    ft.Start();
+  }
   int MiniHit(Point p) { for (int i = 0; i < 3; i++) { RectangleF r = miniRects[i]; r.Inflate(4, 2); if (r.Contains(p)) return i; } return -1; }
   Point downPt, startLoc;
   bool pressing, moved;
@@ -950,41 +975,48 @@ public class PillForm : Form {
   protected override void OnPaint(PaintEventArgs e) {
     Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
     int w = Width, h = Height;
+    // the strongest lit signal colours the whole bar
+    string top = null;
+    foreach (string k in new string[] { "red", "yellow", "green", "live", "msg" }) { if (app.Lit.Contains(k)) { top = k; break; } }
     Color bg = OsUi.PillBg;
+    if (top != null) bg = app.BlinkOn ? OsUi.KindDark(top) : OsUi.KindColor(top);
+    Color ink = top == null ? OsUi.PillInk : (top == "yellow" && !app.BlinkOn ? OsUi.KindText("yellow") : Color.White);
     g.Clear(bg);
     using (GraphicsPath p = new GraphicsPath()) {
       p.AddArc(0, 0, h - 1, h - 1, 90, 180); p.AddArc(w - h, 0, h - 1, h - 1, 270, 180); p.CloseFigure();
-      using (Pen pn = new Pen(OsUi.PillLine, 1.5f)) g.DrawPath(pn, p);
+      using (Pen pn = new Pen(top == null ? OsUi.PillLine : Color.FromArgb(90, Color.White), 1.5f)) g.DrawPath(pn, p);
     }
     float cy = h / 2f;
-    using (Pen pen = new Pen(OsUi.PillInk, 2f)) {
+    using (Pen pen = new Pen(ink, 2f)) {
       pen.LineJoin = LineJoin.Round;
       g.DrawPolygon(pen, new PointF[] { new PointF(20, cy - 1), new PointF(38, cy - 9), new PointF(30, cy + 9), new PointF(27.5f, cy + 1.5f) });
     }
-    string[] kinds = { "msg", "red", "yellow", "green" };
-    float dx = 56, ds = 20;
-    for (int i = 0; i < kinds.Length; i++) {
-      string kd = kinds[i];
-      bool lit = app.Lit.Contains(kd) || (kd == "msg" && app.Lit.Contains("live"));
-      RectangleF r = new RectangleF(dx + i * 30, cy - ds / 2, ds, ds);
-      if (lit) {
-        Color c = app.BlinkOn ? OsUi.KindDark(kd) : OsUi.KindColor(kd);
-        if (!app.BlinkOn) { using (SolidBrush gl = new SolidBrush(Color.FromArgb(70, OsUi.KindColor(kd)))) g.FillEllipse(gl, r.X - 4, r.Y - 4, r.Width + 8, r.Height + 8); }
-        using (SolidBrush b = new SolidBrush(c)) g.FillEllipse(b, r);
-      } else {
+    if (top != null) {
+      // the signal name in big letters, and who sent it
+      string title = top == "msg" ? "New message" : top == "live" ? "Screen share" : OsUi.KindLabel(top);
+      RectangleF tr = new RectangleF(48, 6, w - 48 - 80, h / 2f);
+      RectangleF fr = new RectangleF(48, h / 2f - 1, w - 48 - 80, h / 2f - 5);
+      TextRenderer.DrawText(g, title, fMid, Rectangle.Round(tr), ink, TextFormatFlags.Left | TextFormatFlags.Bottom | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+      if (app.AlertFrom != "") TextRenderer.DrawText(g, app.AlertFrom, fSmall, Rectangle.Round(fr), Color.FromArgb(220, ink), TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+    } else {
+      string[] kinds = { "msg", "red", "yellow", "green" };
+      float dx = 56, ds = 20;
+      for (int i = 0; i < kinds.Length; i++) {
+        RectangleF r = new RectangleF(dx + i * 30, cy - ds / 2, ds, ds);
         using (Pen pn = new Pen(Color.FromArgb(74, 80, 86), 2f)) g.DrawEllipse(pn, r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2);
       }
     }
     int ax = w - 46, ay = (h - 32) / 2;
-    if (app.Other != "") OsUi.DrawAvatar(g, app.Other, new RectangleF(ax, ay, 32, 32), bg, fAvatar);
+    if (app.Other != "" && top == null) OsUi.DrawAvatar(g, app.Other, new RectangleF(ax, ay, 32, 32), bg, fAvatar);
     float mx = w - 70, msz = 13;
-    using (Pen sep = new Pen(Color.FromArgb(58, 63, 68), 1f)) g.DrawLine(sep, mx - 10, 12, mx - 10, h - 12);
+    using (Pen sep = new Pen(top == null ? Color.FromArgb(58, 63, 68) : Color.FromArgb(90, Color.White), 1f)) g.DrawLine(sep, mx - 10, 12, mx - 10, h - 12);
     for (int i = 0; i < 3; i++) {
       RectangleF r = new RectangleF(mx, cy - 21.5f + i * 15, msz, msz);
       miniRects[i] = r;
       Color mc = OsUi.KindColor(miniKinds[i]);
       if (sentKind == miniKinds[i]) { using (SolidBrush gl = new SolidBrush(Color.FromArgb(110, mc))) g.FillEllipse(gl, r.X - 4, r.Y - 4, r.Width + 8, r.Height + 8); }
       using (SolidBrush b = new SolidBrush(mc)) g.FillEllipse(b, r);
+      if (top != null) using (Pen rp = new Pen(Color.FromArgb(200, Color.White), 1.5f)) g.DrawEllipse(rp, r);
     }
     Point mp = PointToClient(Cursor.Position);
     int hov = ClientRectangle.Contains(mp) ? MiniHit(mp) : -1;
@@ -1001,6 +1033,7 @@ public class OsApp : ApplicationContext {
   public Icon AppIcon;
   NotifyIcon tray;
   System.Windows.Forms.Timer watch, blink;
+  OsHotkeys keys;
   HashSet<string> seenKeys = new HashSet<string>();
   Dictionary<string, bool> conn = new Dictionary<string, bool>();
   public string Alert;
@@ -1038,10 +1071,21 @@ public class OsApp : ApplicationContext {
     tray = new NotifyIcon();
     tray.Icon = OsUi.MakeIcon(32); tray.Text = "Office Signal"; tray.Visible = true;
     ContextMenuStrip menu = new ContextMenuStrip();
-    menu.Items.Add("Open Messages", null, delegate { ShowChat(); });
+    menu.Items.Add("Open Messages   (Ctrl+Alt+M)", null, delegate { ShowChat(); });
     menu.Items.Add("Quit", null, delegate { Shutdown(); });
     tray.ContextMenuStrip = menu;
     tray.DoubleClick += delegate { ShowChat(); };
+    try {
+      keys = new OsHotkeys();
+      keys.Pressed += delegate(int id) {
+        if (id == 4) { ShowChat(); return; }
+        string kd = id == 1 ? "red" : id == 2 ? "yellow" : "green";
+        Send("", kd); Pill.ShowSent(kd);
+        if (!Pill.Visible) Pill.Show();
+        tray.ShowBalloonTip(1500, "Office Signal", "Sent: " + OsUi.KindLabel(kd), ToolTipIcon.None);
+      };
+      if (keys.Failed.Count > 0) tray.ShowBalloonTip(4000, "Office Signal", "These shortcuts are used by another app: " + string.Join(", ", keys.Failed.ToArray()), ToolTipIcon.Warning);
+    } catch { }
     watch = new System.Windows.Forms.Timer(); watch.Interval = 500; watch.Tick += delegate { Watch(); }; watch.Start();
     blink = new System.Windows.Forms.Timer(); blink.Interval = 450;
     blink.Tick += delegate {
@@ -1231,6 +1275,7 @@ public class OsApp : ApplicationContext {
     try { Directory.CreateDirectory(cfgDir); File.WriteAllLines(Path.Combine(cfgDir, "me.txt"), new string[] { Name, Cid }, new UTF8Encoding(false)); } catch { }
   }
   public void Shutdown() {
+    try { if (keys != null) keys.Dispose(); } catch { }
     try { StopShare(); } catch { }
     running = false;
     try { tray.Visible = false; tray.Dispose(); } catch { }
