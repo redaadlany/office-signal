@@ -39,6 +39,7 @@ var NAME = P.name || 'Me';
 var SERVER = 'https://ntfy.sh/';
 var TOPIC = (P.topic || '') + 'm';           // a separate channel for music, next to the messages channel
 var ME = Math.random().toString(36).slice(2, 10);
+var PORT = P.port || '';
 var ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
 
 var $ = function (id) { return document.getElementById(id); };
@@ -63,6 +64,17 @@ function meter(stream) {
     (function loop() { an.getByteFrequencyData(data); for (var i = 0; i < bars.length; i++) bars[i].style.height = (4 + data[i + 1] / 255 * 22) + 'px'; requestAnimationFrame(loop); })();
   } catch (e) { }
 }
+var appState = 'wait', listeners = 0, fromName = '';
+function report(st, n, from) { appState = st; if (n !== undefined) listeners = n; if (from) fromName = from; }
+// ask Office Signal (on this PC) for the volume and whether to stop; tell it how it is going
+function poll() {
+  if (!PORT) return;
+  fetch('http://127.0.0.1:' + PORT + '/ctl?role=' + ROLE + '&state=' + appState + '&n=' + listeners + '&from=' + encodeURIComponent(fromName), { cache: 'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (c) { $('player').volume = Math.max(0, Math.min(1, c.vol / 100)); if (c.stop) { if (window.onStop) window.onStop(); setTimeout(function () { window.close(); }, 300); } })
+    .catch(function () { });
+}
+setInterval(poll, 400);
 function setState(title, sub, on) { $('title').textContent = title; $('sub').textContent = sub; $('disc').className = 'disc' + (on ? ' on' : ''); }
 
 // ------------------------------------------------------------------ the one who shares
@@ -83,6 +95,7 @@ if (ROLE === 'send') {
   }
   function updateCount() {
     var n = 0; for (var k in peers) if (peers[k].connectionState === 'connected') n++;
+    if (stream) report('on', n);
     setState('Sharing music', n ? n + ' listening now' : 'Waiting for your colleague to click Listen...', true);
   }
   listen(function (m) {
@@ -93,14 +106,16 @@ if (ROLE === 'send') {
     } else if (m.kind === 'bye' && peers[m.from]) { try { peers[m.from].close(); } catch (e) { } delete peers[m.from]; updateCount(); }
   });
   $('go').onclick = function () {
-    navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, preferCurrentTab: false, selfBrowserSurface: 'exclude', systemAudio: 'include' })
+    navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: true }, preferCurrentTab: false, selfBrowserSurface: 'exclude', systemAudio: 'include' })
       .then(function (s) {
         if (!s.getAudioTracks().length) { s.getTracks().forEach(function (t) { t.stop(); }); setState('No sound in this share', 'Pick a Chrome tab and tick "Share tab audio", then try again.', false); return; }
         s.getVideoTracks().forEach(function (t) { t.stop(); });          // only the sound is sent
         stream = new MediaStream(s.getAudioTracks());
         stream.getAudioTracks()[0].onended = stopAll;
         meter(stream);
+        $('player').srcObject = stream; $('player').play().catch(function () { });
         $('go').style.display = 'none'; $('stop').style.display = '';
+        report('on', 0);
         updateCount();
         post({ kind: 'start' });
       })
@@ -113,9 +128,12 @@ if (ROLE === 'send') {
     stream = null;
     post({ kind: 'stop' });
     $('stop').style.display = 'none'; $('go').style.display = '';
+    $('player').srcObject = null;
+    report('stopped', 0);
     setState('Share music', 'Stopped. Click Share to share again.', false);
   }
   $('stop').onclick = stopAll;
+  window.onStop = function () { if (stream) stopAll(); };
   window.addEventListener('beforeunload', function () { if (stream) navigator.sendBeacon(SERVER + TOPIC, JSON.stringify({ kind: 'stop', from: ME, name: NAME, t: Date.now() })); });
 }
 
@@ -131,7 +149,7 @@ else {
     setState('Connecting...', 'Waiting for the music.', false);
     es = listen(function (m) {
       if (m.kind === 'start') { setTimeout(hello, 300); return; }
-      if (m.kind === 'stop') { if (pc) { pc.close(); pc = null; } $('player').srcObject = null; setState('Music stopped', (m.name || 'Your colleague') + ' stopped sharing.', false); return; }
+      if (m.kind === 'stop') { if (pc) { pc.close(); pc = null; } $('player').srcObject = null; report('stopped', 0); setState('Music stopped', (m.name || 'Your colleague') + ' stopped sharing.', false); return; }
       if (m.to !== ME) return;
       if (m.kind === 'offer') {
         if (pc) { try { pc.close(); } catch (e) { } }
@@ -142,6 +160,7 @@ else {
           $('player').srcObject = s; $('player').volume = $('volume').value / 100; $('player').play().catch(function () { });
           meter(s); $('vol').style.display = '';
           setState('Listening', 'Music from ' + (m.name || 'your colleague'), true);
+          report('listening', 0, m.name);
         };
         pc.onconnectionstatechange = function () { if (pc && pc.connectionState === 'failed') setState('Could not connect', 'Your networks block the connection. Try on the same Wi-Fi.', false); };
         pc.setRemoteDescription(m.sdp).then(function () { return pc.createAnswer(); }).then(function (a) { return pc.setLocalDescription(a); })
@@ -151,6 +170,8 @@ else {
     setTimeout(hello, 800);
   };
   $('volume').oninput = function () { $('player').volume = this.value / 100; };
+  window.onStop = function () { $('stop').onclick(); };
+  if (P.auto) setTimeout(function () { $('go').onclick(); }, 200);
   $('stop').onclick = function () {
     if (pc) { pc.close(); pc = null; } if (es) es.close();
     if (host) post({ kind: 'bye', to: host });

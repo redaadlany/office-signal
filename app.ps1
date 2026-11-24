@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.13'
+$global:appVersion = '2026-11-24.14'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -59,6 +59,7 @@ using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -84,6 +85,11 @@ public static class OsNative {
   [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
   [DllImport("gdi32.dll")] public static extern int GetDeviceCaps(IntPtr dc, int index);
   [DllImport("winmm.dll", CharSet = CharSet.Unicode)] public static extern int mciSendString(string cmd, StringBuilder ret, int len, IntPtr cb);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  public static void MediaKey(byte vk) { keybd_event(vk, 0, 1, UIntPtr.Zero); keybd_event(vk, 0, 3, UIntPtr.Zero); }
   [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
   [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h, int id);
   public static void Drag(Form f) { ReleaseCapture(); SendMessage(f.Handle, 0xA1, (IntPtr)2, IntPtr.Zero); }
@@ -92,27 +98,28 @@ public static class OsNative {
 // Keyboard shortcuts that work from any app (changed in Settings, saved in keys.txt)
 public class OsHotkeys : NativeWindow, IDisposable {
   public event Action<int> Pressed;
-  public static string[] Names = { "Emergency", "Come please", "Call off", "Open Messages" };
-  public static uint[] DefMods = { 3, 3, 3, 3 };              // Ctrl + Alt
-  public static uint[] DefVk = { 0x31, 0x32, 0x33, 0x4D };    // 1, 2, 3, M
-  public uint[] Mods = new uint[4], Vk = new uint[4];
+  public const int Count = 5;
+  public static string[] Names = { "Emergency", "Come please", "Call off", "Open Messages", "Music pause" };
+  public static uint[] DefMods = { 3, 3, 3, 3, 3 };                 // Ctrl + Alt
+  public static uint[] DefVk = { 0x31, 0x32, 0x33, 0x4D, 0x50 };    // 1, 2, 3, M, P
+  public uint[] Mods = new uint[Count], Vk = new uint[Count];
   public List<string> Failed = new List<string>();
   string file;
   public OsHotkeys(string cfgDir) {
     file = Path.Combine(cfgDir, "keys.txt");
     CreateHandle(new CreateParams());
-    for (int i = 0; i < 4; i++) { Mods[i] = DefMods[i]; Vk[i] = DefVk[i]; }
+    for (int i = 0; i < Count; i++) { Mods[i] = DefMods[i]; Vk[i] = DefVk[i]; }
     try {
       if (File.Exists(file)) {
         string[] l = File.ReadAllLines(file);
-        for (int i = 0; i < 4 && i < l.Length; i++) { string[] q = l[i].Split(','); Mods[i] = uint.Parse(q[0]); Vk[i] = uint.Parse(q[1]); }
+        for (int i = 0; i < Count && i < l.Length; i++) { string[] q = l[i].Split(','); Mods[i] = uint.Parse(q[0]); Vk[i] = uint.Parse(q[1]); }
       }
     } catch { }
     Apply();
   }
   public void Apply() {
     Failed.Clear();
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < Count; i++) {
       OsNative.UnregisterHotKey(Handle, i + 1);
       if (Vk[i] == 0) continue;
       if (!OsNative.RegisterHotKey(Handle, i + 1, Mods[i] | 0x4000, Vk[i])) Failed.Add(Label(Mods[i], Vk[i]));
@@ -120,9 +127,9 @@ public class OsHotkeys : NativeWindow, IDisposable {
   }
   public void Set(int i, uint mods, uint vk) {
     Mods[i] = mods; Vk[i] = vk; Apply();
-    try { string[] l = new string[4]; for (int k = 0; k < 4; k++) l[k] = Mods[k] + "," + Vk[k]; File.WriteAllLines(file, l); } catch { }
+    try { string[] l = new string[Count]; for (int k = 0; k < Count; k++) l[k] = Mods[k] + "," + Vk[k]; File.WriteAllLines(file, l); } catch { }
   }
-  public void Reset() { for (int i = 0; i < 4; i++) Set(i, DefMods[i], DefVk[i]); }
+  public void Reset() { for (int i = 0; i < Count; i++) Set(i, DefMods[i], DefVk[i]); }
   public static string Label(uint mods, uint vk) {
     if (vk == 0) return "None";
     List<string> p = new List<string>();
@@ -137,7 +144,7 @@ public class OsHotkeys : NativeWindow, IDisposable {
     if (m.Msg == 0x0312 && Pressed != null) { int id = m.WParam.ToInt32(); Pressed(id); }
     base.WndProc(ref m);
   }
-  public void Dispose() { try { for (int i = 1; i <= 4; i++) OsNative.UnregisterHotKey(Handle, i); DestroyHandle(); } catch { } }
+  public void Dispose() { try { for (int i = 1; i <= Count; i++) OsNative.UnregisterHotKey(Handle, i); DestroyHandle(); } catch { } }
 }
 
 // A box that records a shortcut: click it, then press the keys
@@ -662,8 +669,11 @@ public class ChatForm : Form {
       else cm.Items.Add("Share my screen (live)", null, delegate { StartLive(); });
       cm.Items.Add("Send a screenshot", null, delegate { SendScreenshot(); });
       cm.Items.Add(new ToolStripSeparator());
-      cm.Items.Add("Share music from Chrome", null, delegate { App.OpenMusic("send"); });
-      cm.Items.Add("Listen to shared music", null, delegate { App.OpenMusic("listen"); });
+      if (App.MusicRole != null) cm.Items.Add("Stop the music", null, delegate { App.EndMusic(true); });
+      else {
+        cm.Items.Add("Share music from Chrome", null, delegate { App.OpenMusic("send"); });
+        cm.Items.Add("Listen to shared music", null, delegate { App.OpenMusic("listen"); });
+      }
       cm.Show(shotBtn, new Point(0, -cm.PreferredSize.Height));
     };
     jokeBtn.Click += delegate { App.Send(OsUi.JokeText, "joke"); App.PlayJoke(); FocusInput(); };
@@ -777,7 +787,7 @@ public class SettingsView : Control {
   Font fLbl = new Font("Segoe UI", 9f);
   Font fSeg = new Font("Segoe UI Semibold", 10f);
   Rectangle segRect;
-  KeyBox[] kb = new KeyBox[4];
+  KeyBox[] kb = new KeyBox[OsHotkeys.Count];
   TextBox[] vt = new TextBox[4];
   Label resetKeys, voiceToggle, voiceTest;
   public SettingsView(ChatForm f) {
@@ -790,7 +800,7 @@ public class SettingsView : Control {
     close.Click += delegate { Visible = false; form.FocusInput(); };
     save.Click += delegate { form.App.SetName(nameBox.Text); Visible = false; form.FocusInput(); };
     nameBox.KeyDown += delegate(object o, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; form.App.SetName(nameBox.Text); Visible = false; form.FocusInput(); } };
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < OsHotkeys.Count; i++) {
       KeyBox k = new KeyBox(); k.Index = i; kb[i] = k; Controls.Add(k);
       k.Changed += delegate(object o, EventArgs e) {
         KeyBox s2 = (KeyBox)o;
@@ -813,7 +823,7 @@ public class SettingsView : Control {
   }
   void LoadKeys() {
     OsHotkeys h = form.App.keys;
-    for (int i = 0; i < 4; i++) { kb[i].Mods = h != null ? h.Mods[i] : OsHotkeys.DefMods[i]; kb[i].Vk = h != null ? h.Vk[i] : OsHotkeys.DefVk[i]; kb[i].Invalidate(); }
+    for (int i = 0; i < OsHotkeys.Count; i++) { kb[i].Mods = h != null ? h.Mods[i] : OsHotkeys.DefMods[i]; kb[i].Vk = h != null ? h.Vk[i] : OsHotkeys.DefVk[i]; kb[i].Invalidate(); }
     voiceToggle.Text = form.App.VoiceOn ? "Voice: on" : "Voice: off";
   }
   public void Open() { nameBox.Text = form.App.Name; LoadKeys(); Visible = true; BringToFront(); nameBox.Focus(); nameBox.SelectAll(); }
@@ -831,9 +841,10 @@ public class SettingsView : Control {
     nameBox.Bounds = new Rectangle(30, 200 + (44 - nameBox.PreferredHeight) / 2, Width - 60, nameBox.PreferredHeight);
     save.Bounds = new Rectangle(16, 262, Width - 32, 42);
     int kw = 190;
-    for (int i = 0; i < 4; i++) if (kb[i] != null) kb[i].Bounds = new Rectangle(Width - 16 - kw, 356 + i * 44, kw, 36);
-    if (resetKeys != null) resetKeys.Location = new Point(16, 356 + 4 * 44 + 4);
-    if (voiceToggle != null) { voiceToggle.Location = new Point(Width - 16 - 150, 356 + 4 * 44 + 4); voiceTest.Location = new Point(Width - 16 - 70, 356 + 4 * 44 + 4); }
+    for (int i = 0; i < OsHotkeys.Count; i++) if (kb[i] != null) kb[i].Bounds = new Rectangle(Width - 16 - kw, 356 + i * 44, kw, 36);
+    int ry = 356 + OsHotkeys.Count * 44 + 4;
+    if (resetKeys != null) resetKeys.Location = new Point(16, ry);
+    if (voiceToggle != null) { voiceToggle.Location = new Point(Width - 16 - 150, ry); voiceTest.Location = new Point(Width - 16 - 70, ry); }
   }
   protected override void OnMouseDown(MouseEventArgs e) {
     base.OnMouseDown(e);
@@ -860,9 +871,9 @@ public class SettingsView : Control {
     TextRenderer.DrawText(g, "Your name", fLbl, new Point(16, 176), OsUi.Mute);
     using (GraphicsPath p = OsUi.Round(new RectangleF(16, 200, Width - 32, 44), 10)) using (SolidBrush b = new SolidBrush(OsUi.Box)) g.FillPath(b, p);
     TextRenderer.DrawText(g, "Shortcuts (click a box, then press the keys)", fLbl, new Point(16, 328), OsUi.Mute);
-    Color[] dots = { OsUi.Red, OsUi.Yellow, OsUi.Green, OsUi.Blue };
-    string[] names = { "Emergency", "Come", "Call off", "Message" };
-    for (int i = 0; i < 4; i++) {
+    Color[] dots = { OsUi.Red, OsUi.Yellow, OsUi.Green, OsUi.Blue, OsUi.Purple };
+    string[] names = { "Emergency", "Come", "Call off", "Open Messages", "Music pause" };
+    for (int i = 0; i < OsHotkeys.Count; i++) {
       int y = 356 + i * 44;
       using (SolidBrush b = new SolidBrush(dots[i])) g.FillEllipse(b, 18, y + 13, 10, 10);
       TextRenderer.DrawText(g, names[i], fSeg, new Rectangle(38, y, Width - 260, 36), OsUi.Ink, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
@@ -1001,6 +1012,113 @@ public class LiveViewer : Form {
   }
 }
 
+// Music controls drawn the same way in the bar and in the strip above Messages
+public static class MusicUi {
+  public static void Note(Graphics g, float x, float cy, Color c) {
+    using (SolidBrush b = new SolidBrush(c)) using (Pen p = new Pen(c, 2f)) {
+      g.FillEllipse(b, x, cy + 3, 7, 6); g.FillEllipse(b, x + 10, cy + 1, 7, 6);
+      g.DrawLine(p, x + 6.5f, cy + 6, x + 6.5f, cy - 8); g.DrawLine(p, x + 16.5f, cy + 4, x + 16.5f, cy - 10); g.DrawLine(p, x + 6.5f, cy - 8, x + 16.5f, cy - 10);
+    }
+  }
+  public static void Prev(Graphics g, RectangleF r, Color c) {
+    float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
+    using (SolidBrush b = new SolidBrush(c)) { g.FillRectangle(b, cx - 6, cy - 6, 2.2f, 12); g.FillPolygon(b, new PointF[] { new PointF(cx + 6, cy - 6), new PointF(cx + 6, cy + 6), new PointF(cx - 3, cy) }); }
+  }
+  public static void Next(Graphics g, RectangleF r, Color c) {
+    float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
+    using (SolidBrush b = new SolidBrush(c)) { g.FillRectangle(b, cx + 3.8f, cy - 6, 2.2f, 12); g.FillPolygon(b, new PointF[] { new PointF(cx - 6, cy - 6), new PointF(cx - 6, cy + 6), new PointF(cx + 3, cy) }); }
+  }
+  public static void Play(Graphics g, RectangleF r, bool paused, Color fill, Color ink) {
+    using (SolidBrush b = new SolidBrush(fill)) g.FillEllipse(b, r);
+    float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
+    using (SolidBrush b = new SolidBrush(ink)) {
+      if (paused) g.FillPolygon(b, new PointF[] { new PointF(cx - 3.5f, cy - 6), new PointF(cx - 3.5f, cy + 6), new PointF(cx + 6, cy) });
+      else { g.FillRectangle(b, cx - 5, cy - 5.5f, 3.5f, 11); g.FillRectangle(b, cx + 1.5f, cy - 5.5f, 3.5f, 11); }
+    }
+  }
+  public static void Speaker(Graphics g, RectangleF r, int vol, Color c) {
+    float cx = r.X + r.Width / 2 - 3, cy = r.Y + r.Height / 2;
+    using (SolidBrush b = new SolidBrush(c)) g.FillPolygon(b, new PointF[] { new PointF(cx - 6, cy - 3), new PointF(cx - 2, cy - 3), new PointF(cx + 3, cy - 7), new PointF(cx + 3, cy + 7), new PointF(cx - 2, cy + 3), new PointF(cx - 6, cy + 3) });
+    using (Pen p = new Pen(c, 1.6f)) {
+      if (vol > 0) g.DrawArc(p, cx + 1, cy - 4, 8, 8, -50, 100);
+      if (vol > 50) g.DrawArc(p, cx - 1, cy - 8, 14, 16, -50, 100);
+      if (vol == 0) { g.DrawLine(p, cx + 6, cy - 3, cx + 11, cy + 3); g.DrawLine(p, cx + 11, cy - 3, cx + 6, cy + 3); }
+    }
+  }
+  public static void Close(Graphics g, RectangleF r, Color c) {
+    float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
+    using (Pen p = new Pen(c, 2f)) { g.DrawLine(p, cx - 5, cy - 5, cx + 5, cy + 5); g.DrawLine(p, cx + 5, cy - 5, cx - 5, cy + 5); }
+  }
+  public static string Status(OsApp a) {
+    if (a.MusicRole == "send") return a.MusicState == "wait" ? "Pick the Chrome tab to share" : (a.MusicListeners > 0 ? "Sharing - " + a.MusicListeners + " listening" : "Sharing - waiting for your colleague");
+    return a.MusicState == "wait" ? "Connecting..." : "Music - " + (a.MusicFrom != "" ? a.MusicFrom : "your colleague");
+  }
+}
+
+public class MusicStrip : Form {
+  OsApp app;
+  Font f = new Font("Segoe UI", 9f);
+  RectangleF rPrev, rPlay, rNext, rVol, rBar, rClose;
+  ToolTip tip = new ToolTip();
+  public MusicStrip(OsApp a) {
+    app = a;
+    SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+    FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
+    BackColor = Color.Black; Text = "Office Signal music";
+    Owner = a.Chat;
+  }
+  protected override bool ShowWithoutActivation { get { return true; } }
+  public void Follow() {
+    Form c = app.Chat;
+    bool want = app.MusicRole != null && c.Visible && c.WindowState != FormWindowState.Minimized;
+    if (!want) { if (Visible) Hide(); return; }
+    int h = 40, y = c.Top - h - 6;
+    if (y < Screen.FromControl(c).WorkingArea.Top) y = c.Bottom + 6;
+    Bounds = new Rectangle(c.Left, y, c.Width, h);
+    using (GraphicsPath p = OsUi.Round(new RectangleF(0, 0, Width, Height), 12)) Region = new Region(p);
+    if (!Visible) Show();
+    Invalidate();
+  }
+  protected override void OnPaint(PaintEventArgs e) {
+    Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+    int w = Width, h = Height; float cy = h / 2f;
+    g.Clear(OsUi.PillBg);
+    using (GraphicsPath p = OsUi.Round(new RectangleF(0.5f, 0.5f, w - 1, h - 1), 12)) using (Pen pn = new Pen(OsUi.Purple, 1f)) g.DrawPath(pn, p);
+    MusicUi.Note(g, 12, cy, Color.FromArgb(167, 139, 250));
+    rClose = new RectangleF(w - 34, cy - 12, 24, 24);
+    rBar = new RectangleF(w - 100, cy - 2, 56, 4);
+    rVol = new RectangleF(w - 126, cy - 12, 24, 24);
+    rNext = new RectangleF(w - 156, cy - 12, 24, 24);
+    rPlay = new RectangleF(w - 186, cy - 13, 26, 26);
+    rPrev = new RectangleF(w - 214, cy - 12, 24, 24);
+    TextRenderer.DrawText(g, MusicUi.Status(app), f, new Rectangle(38, 0, (int)rPrev.X - 44, h), OsUi.PillInk, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+    Color ink = OsUi.PillInk;
+    MusicUi.Prev(g, rPrev, ink); MusicUi.Play(g, rPlay, app.MusicPaused, Color.FromArgb(167, 139, 250), OsUi.PillBg); MusicUi.Next(g, rNext, ink);
+    MusicUi.Speaker(g, rVol, app.MusicVol, Color.FromArgb(139, 145, 150));
+    using (SolidBrush b = new SolidBrush(Color.FromArgb(47, 51, 54))) g.FillRectangle(b, rBar);
+    using (SolidBrush b = new SolidBrush(Color.FromArgb(167, 139, 250))) g.FillRectangle(b, rBar.X, rBar.Y, rBar.Width * app.MusicVol / 100f, rBar.Height);
+    MusicUi.Close(g, rClose, OsUi.Red);
+  }
+  bool dragVol;
+  protected override void OnMouseDown(MouseEventArgs e) {
+    base.OnMouseDown(e);
+    RectangleF bar = rBar; bar.Inflate(4, 8);
+    if (bar.Contains(e.Location)) { dragVol = true; SetVolAt(e.X); }
+  }
+  protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if (dragVol) SetVolAt(e.X); }
+  void SetVolAt(int x) { app.SetMusicVol((int)Math.Round((x - rBar.X) / rBar.Width * 100)); }
+  protected override void OnMouseUp(MouseEventArgs e) {
+    base.OnMouseUp(e);
+    if (dragVol) { dragVol = false; return; }
+    if (rPrev.Contains(e.Location)) app.MusicCmd("prev");
+    else if (rPlay.Contains(e.Location)) app.MusicCmd("playpause");
+    else if (rNext.Contains(e.Location)) app.MusicCmd("next");
+    else if (rVol.Contains(e.Location)) app.SetMusicVol(app.MusicVol > 0 ? 0 : 80);
+    else if (rClose.Contains(e.Location)) app.MusicCmd("stop");
+  }
+  protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); app.SetMusicVol(app.MusicVol + (e.Delta > 0 ? 5 : -5)); }
+}
+
 public class PillForm : Form {
   OsApp app;
   Font fBig = new Font("Segoe UI Semibold", 13.5f);
@@ -1045,6 +1163,18 @@ public class PillForm : Form {
     }
     sentBlink.Stop(); sentBlink.Start();
   }
+  RectangleF mPrev, mPlay, mNext, mVol;
+  bool musicOn;
+  string MusicHit(Point p) {
+    if (!musicOn) return null;
+    RectangleF r;
+    r = mPrev; r.Inflate(3, 6); if (r.Contains(p)) return "prev";
+    r = mPlay; r.Inflate(2, 4); if (r.Contains(p)) return "playpause";
+    r = mNext; r.Inflate(3, 6); if (r.Contains(p)) return "next";
+    r = mVol; r.Inflate(3, 6); if (r.Contains(p)) return "vol";
+    return null;
+  }
+  protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); if (app.MusicRole != null) app.SetMusicVol(app.MusicVol + (e.Delta > 0 ? 5 : -5)); }
   int MiniHit(Point p) { for (int i = 0; i < 3; i++) { RectangleF r = miniRects[i]; r.Inflate(4, 2); if (r.Contains(p)) return i; } return -1; }
   Point downPt, startLoc;
   bool pressing, moved;
@@ -1082,6 +1212,9 @@ public class PillForm : Form {
     pressing = false;
     Cursor = Cursors.Hand;
     if (!moved && e.Button == MouseButtons.Left) {
+      string mh = MusicHit(e.Location);
+      if (mh == "vol") { app.SetMusicVol(app.MusicVol > 0 ? 0 : 80); return; }
+      if (mh != null) { app.MusicCmd(mh); return; }
       int mi = MiniHit(e.Location);
       if (mi >= 0) {
         string kd = miniKinds[mi];
@@ -1118,9 +1251,22 @@ public class PillForm : Form {
       using (Pen pn = new Pen(top == null ? OsUi.PillLine : Color.FromArgb(90, Color.White), 1.5f)) g.DrawPath(pn, p);
     }
     float cy = h / 2f;
-    using (Pen pen = new Pen(ink, 2f)) {
+    musicOn = top == null && app.MusicRole != null;
+    if (musicOn) MusicUi.Note(g, 18, cy, Color.FromArgb(167, 139, 250));
+    else using (Pen pen = new Pen(ink, 2f)) {
       pen.LineJoin = LineJoin.Round;
       g.DrawPolygon(pen, new PointF[] { new PointF(20, cy - 1), new PointF(38, cy - 9), new PointF(30, cy + 9), new PointF(27.5f, cy + 1.5f) });
+    }
+    if (musicOn) {
+      if (app.MusicState == "wait") {
+        TextRenderer.DrawText(g, MusicUi.Status(app), fSmall, new Rectangle(44, 0, w - 44 - 86, h), OsUi.PillInk, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.WordBreak);
+        mPrev = mPlay = mNext = mVol = RectangleF.Empty;
+      } else {
+        mPrev = new RectangleF(46, cy - 12, 24, 24); mPlay = new RectangleF(74, cy - 14, 28, 28); mNext = new RectangleF(106, cy - 12, 24, 24); mVol = new RectangleF(136, cy - 12, 26, 24);
+        MusicUi.Prev(g, mPrev, OsUi.PillInk); MusicUi.Play(g, mPlay, app.MusicPaused, Color.FromArgb(167, 139, 250), OsUi.PillBg); MusicUi.Next(g, mNext, OsUi.PillInk);
+        MusicUi.Speaker(g, mVol, app.MusicVol, Color.FromArgb(139, 145, 150));
+        TextRenderer.DrawText(g, app.MusicVol + "%", fSmall, new Point(162, (int)cy - 8), Color.FromArgb(139, 145, 150));
+      }
     }
     if (top != null) {
       // the signal name in big letters, and who sent it
@@ -1194,6 +1340,10 @@ public class OsApp : ApplicationContext {
     IntPtr h1 = Chat.Handle;
     Pill = new PillForm(this);
     IntPtr h2 = Pill.Handle;
+    Strip = new MusicStrip(this);
+    Chat.LocationChanged += delegate { Strip.Follow(); };
+    Chat.SizeChanged += delegate { Strip.Follow(); };
+    Chat.VisibleChanged += delegate { Strip.Follow(); };
     tray = new NotifyIcon();
     tray.Icon = OsUi.MakeIcon(32); tray.Text = "Office Signal"; tray.Visible = true;
     ContextMenuStrip menu = new ContextMenuStrip();
@@ -1205,6 +1355,7 @@ public class OsApp : ApplicationContext {
       keys = new OsHotkeys(cfgDir);
       keys.Pressed += delegate(int id) {
         if (id == 4) { ShowChat(); return; }
+        if (id == 5) { MusicCmd("playpause"); return; }
         string kd = id == 1 ? "red" : id == 2 ? "yellow" : "green";
         Send("", kd); Pill.ShowSent(kd);
         if (!Pill.Visible) Pill.Show();
@@ -1334,22 +1485,128 @@ public class OsApp : ApplicationContext {
     foreach (string f in c) if (File.Exists(f)) return f;
     return null;
   }
+  // ---- music state (the Chrome page runs hidden; Office Signal shows the controls) ----
+  public string MusicRole;            // null, "send" or "listen"
+  public string MusicState = "";      // what the page says: wait, on, listening, stopped
+  public string MusicFrom = "";
+  public int MusicListeners;
+  public int MusicVol = 80;
+  public bool MusicPaused;
+  public bool MusicActive { get { return MusicRole != null && (MusicState == "on" || MusicState == "listening"); } }
+  DateTime duckUntil = DateTime.MinValue, musicSeen = DateTime.MinValue;
+  bool musicStop, musicAnnounced;
+  int musicPort;
+  IntPtr musicWnd = IntPtr.Zero;
+  public MusicStrip Strip;
+  public void Duck() { duckUntil = DateTime.Now.AddSeconds(5); }
+  // tiny local web server: the music page asks it what to do (volume, stop) and says how it is going
+  void StartMusicServer() {
+    if (musicPort != 0) return;
+    for (int port = 47213; port < 47233 && musicPort == 0; port++) {
+      try {
+        TcpListener l = new TcpListener(IPAddress.Loopback, port); l.Start(); musicPort = port;
+        Thread t = new Thread(delegate() {
+          while (running) {
+            try {
+              using (TcpClient c = l.AcceptTcpClient()) {
+                c.ReceiveTimeout = 2000;
+                NetworkStream ns = c.GetStream();
+                byte[] buf = new byte[4096]; int n = ns.Read(buf, 0, buf.Length);
+                string req = Encoding.ASCII.GetString(buf, 0, Math.Max(0, n));
+                string line = req.Split('\n')[0];
+                string q = ""; int qi = line.IndexOf('?'); if (qi >= 0) { int sp = line.IndexOf(' ', qi); q = line.Substring(qi + 1, (sp > qi ? sp : line.Length) - qi - 1); }
+                Dictionary<string, string> a2 = new Dictionary<string, string>();
+                foreach (string kv in q.Split('&')) { int e = kv.IndexOf('='); if (e > 0) a2[kv.Substring(0, e)] = Uri.UnescapeDataString(kv.Substring(e + 1)); }
+                string st; a2.TryGetValue("state", out st);
+                string ls; a2.TryGetValue("n", out ls);
+                string fr; a2.TryGetValue("from", out fr);
+                Ui(delegate { MusicReport(st ?? "", ls, fr); });
+                int v = MusicVol; if (DateTime.Now < duckUntil) v = (int)(v * 0.8);
+                string body = "{\"vol\":" + v + ",\"stop\":" + (musicStop ? "true" : "false") + "}";
+                string resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Private-Network: true\r\nCache-Control: no-store\r\nContent-Length: " + Encoding.ASCII.GetByteCount(body) + "\r\nConnection: close\r\n\r\n" + body;
+                byte[] rb = Encoding.ASCII.GetBytes(resp); ns.Write(rb, 0, rb.Length);
+              }
+            } catch { Thread.Sleep(50); }
+          }
+        });
+        t.IsBackground = true; t.Start();
+      } catch { }
+    }
+  }
+  void MusicReport(string st, string listeners, string from) {
+    if (MusicRole == null) return;
+    musicSeen = DateTime.Now;
+    if (listeners != null) { int k; if (int.TryParse(listeners, out k)) MusicListeners = k; }
+    if (!string.IsNullOrEmpty(from)) MusicFrom = from;
+    string old = MusicState; MusicState = st;
+    if (st == "on" || st == "listening") {
+      HideMusicWindow();
+      if (MusicRole == "send" && !musicAnnounced) { musicAnnounced = true; Send("Sharing music - click the bar to listen", "music"); }
+    }
+    if (st == "stopped" && MusicRole != null && old != "stopped") { EndMusic(false); return; }
+    if (old != st) RefreshMusicUi();
+  }
+  void HideMusicWindow() {
+    if (musicWnd == IntPtr.Zero) musicWnd = OsNative.FindWindow(null, "Office Signal - Music");
+    if (musicWnd != IntPtr.Zero) OsNative.ShowWindow(musicWnd, 0);
+  }
+  public void RefreshMusicUi() {
+    if (Strip != null) Strip.Follow();
+    Pill.Invalidate();
+  }
   public void OpenMusic(string role) {
+    if (MusicRole != null) EndMusic(true);
+    StartMusicServer();
     ThreadPool.QueueUserWorkItem(delegate {
       if (!File.Exists(MusicPage()) || (DateTime.Now - File.GetLastWriteTime(MusicPage())).TotalMinutes > 30) FetchMusicPage();
       Ui(delegate {
         if (!File.Exists(MusicPage())) { MessageBox.Show(Chat, "The music page could not be downloaded. Check the internet and try again.", "Office Signal"); return; }
         string br = FindBrowser();
         if (br == null) { MessageBox.Show(Chat, "Google Chrome is needed to share music.", "Office Signal"); return; }
-        string url = "file:///" + MusicPage().Replace('\\', '/').Replace(" ", "%20") + "#role=" + role + "&topic=" + Uri.EscapeDataString(Topic) + "&name=" + Uri.EscapeDataString(Name);
-        try { System.Diagnostics.Process.Start(br, "--app=\"" + url + "\" --window-size=380,480"); } catch { }
-        if (role == "send") Send("Sharing music from Chrome - click the bar to listen", "music");
+        musicSeen = DateTime.Now; MusicRole = role; MusicState = "wait"; MusicPaused = false; musicStop = false; musicAnnounced = false; musicWnd = IntPtr.Zero; MusicListeners = 0;
+        string url = "file:///" + MusicPage().Replace('\\', '/').Replace(" ", "%20") + "#role=" + role + "&topic=" + Uri.EscapeDataString(Topic) + "&name=" + Uri.EscapeDataString(Name) + "&port=" + musicPort + "&auto=1";
+        string args = "--app=\"" + url + "\" --window-size=380,480";
+        // the listener runs in its own small Chrome profile, where music may start without a click
+        if (role == "listen") args += " --user-data-dir=\"" + Path.Combine(cfgDir, "chrome") + "\" --autoplay-policy=no-user-gesture-required --no-first-run --no-default-browser-check";
+        try { System.Diagnostics.Process.Start(br, args); } catch { }
+        RefreshMusicUi();
       });
     });
   }
-  public void PlayJoke() { if (VoiceOn) PlayFile("joke"); }
+  public void EndMusic(bool tellPage) {
+    if (MusicRole == null) return;
+    bool wasSend = MusicRole == "send" && musicAnnounced;
+    musicStop = true;
+    IntPtr w = musicWnd != IntPtr.Zero ? musicWnd : OsNative.FindWindow(null, "Office Signal - Music");
+    System.Windows.Forms.Timer t = new System.Windows.Forms.Timer(); t.Interval = 1500;
+    t.Tick += delegate { t.Stop(); t.Dispose(); if (w != IntPtr.Zero) OsNative.PostMessage(w, 0x0010, IntPtr.Zero, IntPtr.Zero); musicStop = false; };
+    t.Start();
+    MusicRole = null; MusicState = ""; MusicListeners = 0; musicWnd = IntPtr.Zero;
+    if (wasSend) Send("stop", "musicctl");
+    RefreshMusicUi();
+  }
+  // play / pause / next / prev: the PC that shares presses the media keys for its Chrome tab
+  public void MusicCmd(string c) {
+    if (MusicRole == null) return;
+    if (c == "stop") { EndMusic(true); return; }
+    if (c == "playpause") MusicPaused = !MusicPaused;
+    if (MusicRole == "send") PressMedia(c); else Send(c, "musicctl");
+    RefreshMusicUi();
+  }
+  static void PressMedia(string c) {
+    if (c == "playpause") OsNative.MediaKey(0xB3);
+    else if (c == "next") OsNative.MediaKey(0xB0);
+    else if (c == "prev") OsNative.MediaKey(0xB1);
+  }
+  public void SetMusicVol(int v) { MusicVol = Math.Max(0, Math.Min(100, v)); RefreshMusicUi(); }
+  void HandleMusicCtl(string c, string from) {
+    if (c == "stop") { if (MusicRole == "listen") EndMusic(true); ClearKind("music"); return; }
+    if (MusicRole == "send") { if (c == "playpause") MusicPaused = !MusicPaused; PressMedia(c); RefreshMusicUi(); }
+  }
+  public void PlayJoke() { Duck(); if (VoiceOn) PlayFile("joke"); }
   void StartAlert(string kind, string from, string text) { StartAlert(kind, from, text, true); }
   void StartAlert(string kind, string from, string text, bool speak) {
+    if (kind != "music") Duck();
     if (speak) Speak(kind, from, false);
     Alert = kind; AlertFrom = from; AlertText = text ?? ""; BlinkOn = false;
     if (OsUi.IsSignal(kind)) { foreach (string o in new string[] { "red", "yellow", "green" }) { if (o != kind) { Lit.Remove(o); litText.Remove(o); litAt.Remove(o); } } }
@@ -1365,6 +1622,11 @@ public class OsApp : ApplicationContext {
     blink.Start();
   }
   void Watch() {
+    if (MusicRole != null) {
+      double quiet = (DateTime.Now - musicSeen).TotalSeconds;
+      if (MusicState != "wait" && quiet > 75) EndMusic(false);
+      else if (MusicState == "wait" && musicSeen != DateTime.MinValue && quiet > 120) EndMusic(false);
+    }
     bool shown = Chat.Visible && Chat.WindowState != FormWindowState.Minimized;
     bool wantPill = Lit.Count > 0 || !shown;
     if (wantPill && !Pill.Visible) { Pill.Show(); Pill.TopMost = true; }
@@ -1471,7 +1733,7 @@ public class OsApp : ApplicationContext {
     viewer.Show(); viewer.Activate();
   }
   public void PillClicked() {
-    if (Lit.Contains("music") && !Lit.Contains("red") && !Lit.Contains("yellow") && !Lit.Contains("green")) { ClearKind("music"); OpenMusic("listen"); return; }
+    if (Lit.Contains("music") && !Lit.Contains("red") && !Lit.Contains("yellow") && !Lit.Contains("green")) { ClearKind("music"); if (MusicRole == null) OpenMusic("listen"); return; }
     if (Lit.Contains("live") && !Lit.Contains("red") && !Lit.Contains("yellow") && !Lit.Contains("green")) {
       string who = litText["live"].Replace(" is sharing the screen", ""); ClearAlert(); OpenViewer(who); return;
     }
@@ -1491,6 +1753,7 @@ public class OsApp : ApplicationContext {
   public void Shutdown() {
     try { if (keys != null) keys.Dispose(); } catch { }
     try { if (synth != null) synth.Dispose(); } catch { }
+    try { EndMusic(true); } catch { }
     try { StopShare(); } catch { }
     running = false;
     try { tray.Visible = false; tray.Dispose(); } catch { }
@@ -1582,6 +1845,7 @@ public class OsApp : ApplicationContext {
   }
 
   public void Deliver(OsMsg m, bool live) {
+    if (m.Type == "musicctl") { if (seenKeys.Add(m.Key) && live && !m.Mine) HandleMusicCtl(m.Text, m.Name); return; }
     if (!seenKeys.Add(m.Key)) { if (m.Mine) Chat.View.UpdateTime(m.Key, m.Time); return; }
     if (m.Type == "seen") {
       if (!m.Mine && m.SeenT > Chat.View.SeenUpTo) { Chat.View.SeenUpTo = m.SeenT; Chat.View.Invalidate(); }
@@ -1644,7 +1908,7 @@ public class OsApp : ApplicationContext {
     if (type == "seen") d["t"] = seenSent;
     if (url != null) d["url"] = url;
     string body = new JavaScriptSerializer().Serialize(d);
-    if (type != "seen") {
+    if (type != "seen" && type != "musicctl") {
       OsMsg m = new OsMsg();
       m.Name = Name; m.C = Cid; m.Text = text ?? ""; m.Type = type ?? ""; m.Key = key; m.Time = OsUi.Now(); m.Mine = true;
       m.Url = url ?? ""; m.Img = img;
@@ -1662,7 +1926,20 @@ public class OsApp : ApplicationContext {
 '@
 $goodFile = $global:goodFile
 $built = $false
-try { Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms, System.Drawing, System.Web.Extensions, System.Speech -IgnoreWarnings -ErrorAction Stop; $built = $true }
+# faster start: the built program is kept in build\os-<version>.dll and reused next time
+$bdir = Join-Path $global:dir 'build'
+$dll = Join-Path $bdir ('os-' + $global:appVersion + '.dll')
+if (Test-Path $dll) { try { Add-Type -Path $dll -ErrorAction Stop; $built = $true } catch {} }
+if (-not $built) {
+try {
+  New-Item -ItemType Directory -Force -Path $bdir | Out-Null
+  $tmpDll = Join-Path $bdir ('os-' + $global:appVersion + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.dll')
+  Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms, System.Drawing, System.Web.Extensions, System.Speech -IgnoreWarnings -OutputAssembly $tmpDll -OutputType Library -ErrorAction Stop
+  try { Move-Item -LiteralPath $tmpDll -Destination $dll -Force -ErrorAction Stop } catch { $dll = $tmpDll }
+  Add-Type -Path $dll -ErrorAction Stop
+  $built = $true
+  Get-ChildItem -LiteralPath $bdir -Filter 'os-*.dll' | Where-Object { $_.FullName -ne $dll } | Remove-Item -Force -ErrorAction SilentlyContinue
+}
 catch {
   $det = (@($Error) | Select-Object -First 6 | ForEach-Object { $_.ToString() }) -join "`r`n"
   if (-not $global:fallbackTried -and (Test-Path $goodFile)) {
@@ -1673,6 +1950,7 @@ catch {
     return
   }
   throw "Build failed:`r`n$det"
+}
 }
 if ($built -and $global:appCache -and (Test-Path $global:appCache)) {
   try {
