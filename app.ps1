@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-24.7'
+$global:appVersion = '2026-11-24.8'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -83,6 +83,7 @@ public static class OsNative {
   [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr h);
   [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
   [DllImport("gdi32.dll")] public static extern int GetDeviceCaps(IntPtr dc, int index);
+  [DllImport("winmm.dll", CharSet = CharSet.Unicode)] public static extern int mciSendString(string cmd, StringBuilder ret, int len, IntPtr cb);
   [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
   [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h, int id);
   public static void Drag(Form f) { ReleaseCapture(); SendMessage(f.Handle, 0xA1, (IntPtr)2, IntPtr.Zero); }
@@ -1195,7 +1196,7 @@ public class OsApp : ApplicationContext {
     try { OsNative.SetCurrentProcessExplicitAppUserModelID("RoboTalent.OfficeSignal"); } catch { }
     try { OsUi.SetTheme(!(File.Exists(Path.Combine(cfgDir, "theme.txt")) && File.ReadAllText(Path.Combine(cfgDir, "theme.txt")).Trim() == "dark")); } catch { OsUi.SetTheme(true); }
     AppIcon = OsUi.MakeIcon(64);
-    LoadVoice();
+    LoadVoice(); FetchSounds();
     Chat = new ChatForm(this);
     IntPtr h1 = Chat.Handle;
     Pill = new PillForm(this);
@@ -1285,9 +1286,35 @@ public class OsApp : ApplicationContext {
     try { Directory.CreateDirectory(cfgDir); List<string> l = new List<string>(); l.Add(VoiceOn ? "on" : "off"); l.AddRange(VoiceText); File.WriteAllLines(VoiceFile(), l.ToArray(), new UTF8Encoding(false)); } catch { }
   }
   public static int VoiceIndex(string kind) { if (kind == "red") return 0; if (kind == "yellow") return 1; if (kind == "green") return 2; if (kind == "msg") return 3; return -1; }
+  // recorded voices (sounds\red.mp3, yellow.mp3, green.mp3), downloaded from GitHub once
+  string SoundDir() { return Path.Combine(cfgDir, "sounds"); }
+  public void FetchSounds() {
+    ThreadPool.QueueUserWorkItem(delegate {
+      foreach (string k in new string[] { "red", "yellow", "green", "msg" }) {
+        try {
+          string f = Path.Combine(SoundDir(), k + ".mp3");
+          if (File.Exists(f) && new FileInfo(f).Length > 1000) continue;
+          Directory.CreateDirectory(SoundDir());
+          using (WebClient wc = new WebClient()) { wc.DownloadFile("https://raw.githubusercontent.com/redaadlany/office-signal/main/sounds/" + k + ".mp3", f + ".tmp"); }
+          if (new FileInfo(f + ".tmp").Length > 1000) { if (File.Exists(f)) File.Delete(f); File.Move(f + ".tmp", f); } else File.Delete(f + ".tmp");
+        } catch { try { File.Delete(Path.Combine(SoundDir(), k + ".mp3.tmp")); } catch { } }
+      }
+    });
+  }
+  bool PlayFile(string kind) {
+    string f = Path.Combine(SoundDir(), kind + ".mp3");
+    if (!File.Exists(f)) return false;
+    try {
+      OsNative.mciSendString("close osv", null, 0, IntPtr.Zero);
+      if (OsNative.mciSendString("open \"" + f + "\" type mpegvideo alias osv", null, 0, IntPtr.Zero) != 0) return false;
+      OsNative.mciSendString("setaudio osv volume to 750", null, 0, IntPtr.Zero);
+      return OsNative.mciSendString("play osv", null, 0, IntPtr.Zero) == 0;
+    } catch { return false; }
+  }
   public void Speak(string kind, string from, bool test) {
     if (!VoiceOn && !test) return;
     int i = VoiceIndex(kind); if (i < 0) return;
+    if (PlayFile(kind)) return;
     string t = (VoiceText[i] ?? "").Replace("{name}", from ?? "").Trim().Trim(',').Trim();
     if (t == "") return;
     try {
