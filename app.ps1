@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-25.1'
+$global:appVersion = '2026-11-25.2'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -76,6 +76,8 @@ public class OsMsg {
 }
 
 public static class OsNative {
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point p);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
   [DllImport("user32.dll")] public static extern bool ReleaseCapture();
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string l);
@@ -1668,7 +1670,16 @@ public class OsApp : ApplicationContext {
     Pill.Invalidate();
     blink.Start();
   }
-  public bool ChatShown() { return Chat != null && Chat.Visible && Chat.WindowState != FormWindowState.Minimized; }
+  // Messages counts as open only when it is really on screen, not hidden behind other windows
+  public bool ChatShown() {
+    if (Chat == null || !Chat.Visible || Chat.WindowState == FormWindowState.Minimized) return false;
+    Rectangle b = Chat.Bounds;
+    Point[] pts = { new Point(b.Left + b.Width / 2, b.Top + 40), new Point(b.Left + b.Width / 2, b.Top + b.Height / 2), new Point(b.Left + b.Width / 2, b.Bottom - 40) };
+    foreach (Point pt in pts) {
+      try { IntPtr w = OsNative.GetAncestor(OsNative.WindowFromPoint(pt), 2); if (w == Chat.Handle) return true; } catch { }
+    }
+    return false;
+  }
   void Watch() {
     if (MusicRole == "send" && musicAnnounced && (DateTime.Now - lastBeat).TotalSeconds > 45) { lastBeat = DateTime.Now; Send("on", "musicctl"); }
     if (MusicOffer != null && MusicRole != "listen" && (DateTime.Now - offerSeen).TotalSeconds > 150) { MusicOffer = null; RefreshMusicUi(); }
@@ -1677,8 +1688,7 @@ public class OsApp : ApplicationContext {
       if (MusicState != "wait" && quiet > 150) EndMusic(false);
       else if (MusicState == "wait" && musicSeen != DateTime.MinValue && quiet > 180) EndMusic(false);
     }
-    bool shown = Chat.Visible && Chat.WindowState != FormWindowState.Minimized;
-    bool wantPill = !shown;
+    bool wantPill = !ChatShown();
     if (wantPill && !Pill.Visible) { Pill.Show(); Pill.TopMost = true; }
     else if (!wantPill && Pill.Visible) Pill.Hide();
     if (ChatActive()) {
