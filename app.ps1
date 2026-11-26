@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-26.5'
+$global:appVersion = '2026-11-26.6'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -76,7 +76,6 @@ public class OsMsg {
 }
 
 public static class OsNative {
-  [DllImport("shell32.dll")] public static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string id);
   [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point p);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
   [DllImport("user32.dll")] public static extern bool ReleaseCapture();
@@ -2042,6 +2041,7 @@ try {
 }
 catch {
   $det = (@($Error) | Select-Object -First 6 | ForEach-Object { $_.ToString() }) -join "`r`n"
+  try { [IO.File]::WriteAllText((Join-Path $bdir 'error.txt'), ($global:appVersion + "`r`n" + $det)); [IO.File]::WriteAllText((Join-Path $global:dir 'failed.txt'), $global:appVersion) } catch {}
   if (-not $global:fallbackTried -and (Test-Path $goodFile)) {
     # this version does not work: run the last version that worked instead
     $global:fallbackTried = $true
@@ -2109,7 +2109,7 @@ if (Test-Path `$global:appCache) {
     $psPart = $psPart.Replace('$global:launcher = $f', 'if ($global:OsExe) { $global:launcher = $global:OsExe } else { $global:launcher = Join-Path $PSScriptRoot ''Office Signal.exe''; if (-not (Test-Path $global:launcher)) { $global:launcher = Join-Path $PSScriptRoot ''Office Signal.bat'' } }')
     [IO.File]::WriteAllText((Join-Path $global:dir 'launcher.ps1'), ($psPart -replace "`r?`n", "`r`n"), (New-Object Text.UTF8Encoding $false))
     $exeMark = Join-Path $global:dir 'launcher.ver'
-    if (-not (Test-Path $exe) -or -not (Test-Path $exeMark) -or ([IO.File]::ReadAllText($exeMark).Trim() -ne '2')) {
+    if (-not (Test-Path $exe) -or -not (Test-Path $exeMark) -or ([IO.File]::ReadAllText($exeMark).Trim() -ne '3')) {
       $src = @'
 using System; using System.Diagnostics; using System.IO; using System.Threading;
 using System.Management.Automation; using System.Management.Automation.Runspaces;
@@ -2134,14 +2134,23 @@ static class OfficeSignalLauncher {
       Process.Start(si);
       return;
     }
+    DateTime t0 = DateTime.Now;
+    bool bad = false;
     try {
       using (PowerShell ps = PowerShell.Create()) {
         ps.Runspace = rs;
         ps.AddScript("$global:OsExe = '" + exe.Replace("'", "''") + "'\r\n" + File.ReadAllText(f));
         ps.Invoke();
+        if (ps.HadErrors) bad = true;
       }
-    } catch { }
+    } catch { bad = true; }
     try { rs.Close(); } catch { }
+    if (bad && (DateTime.Now - t0).TotalSeconds < 20) {
+      string ps2 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
+      ProcessStartInfo s2 = new ProcessStartInfo(ps2, "-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + f + "\"");
+      s2.UseShellExecute = false; s2.CreateNoWindow = true; s2.WorkingDirectory = d;
+      Process.Start(s2);
+    }
   }
 }
 '@
@@ -2160,7 +2169,7 @@ static class OfficeSignalLauncher {
         $res = $prov.CompileAssemblyFromSource($cp, $src)
         if (-not $res.Errors.HasErrors -and (Test-Path $tmpExe)) { $ok = $true }
       }
-      if ($ok) { Copy-Item -LiteralPath $tmpExe -Destination $exe -Force; Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue; [IO.File]::WriteAllText($exeMark, '2') }
+      if ($ok) { Copy-Item -LiteralPath $tmpExe -Destination $exe -Force; Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue; [IO.File]::WriteAllText($exeMark, '3') }
     }
   } catch {}
   if (Test-Path $exe) { $stable = $exe }
@@ -2213,7 +2222,10 @@ Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
   }
 } catch {}
 
-try { [OsNative]::SetCurrentProcessExplicitAppUserModelID('RedaAdlany.OfficeSignal') | Out-Null } catch {}
+try {
+  Add-Type -Name OsAppId -Namespace OsExtra -MemberDefinition '[DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string id);' -ErrorAction Stop
+  [OsExtra.OsAppId]::SetCurrentProcessExplicitAppUserModelID('RedaAdlany.OfficeSignal') | Out-Null
+} catch {}
 $global:app = New-Object OsApp($global:myName, $global:myCid, $global:topic)
 
 # ---- automatic updates: check the online copy every 20 minutes ----
@@ -2240,7 +2252,8 @@ $global:updTimer.Interval = 5 * 60 * 1000
 $global:updTimer.Add_Tick({
   try {
     $new = Get-LatestApp
-    if ($new -and (Get-VerNum (Get-TextVer $new)) -gt (Get-VerNum $global:appVersion)) {
+    $failedVer = ''; try { $failedVer = ([IO.File]::ReadAllText((Join-Path $global:dir 'failed.txt'))).Trim() } catch {}
+    if ($new -and (Get-VerNum (Get-TextVer $new)) -gt (Get-VerNum $global:appVersion) -and (Get-TextVer $new) -ne $failedVer) {
       [IO.File]::WriteAllText($global:appCache, $new, (New-Object Text.UTF8Encoding $false))
       Restart-App
     }
