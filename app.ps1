@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-26.3'
+$global:appVersion = '2026-11-26.4'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -76,6 +76,7 @@ public class OsMsg {
 }
 
 public static class OsNative {
+  [DllImport("shell32.dll")] public static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string id);
   [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point p);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
   [DllImport("user32.dll")] public static extern bool ReleaseCapture();
@@ -2101,13 +2102,50 @@ if (Test-Path `$global:appCache) {
 }
 "@
   try { [IO.File]::WriteAllText($stable, ($launcherText -replace "`r?`n", "`r`n"), [Text.Encoding]::ASCII) } catch {}
+  # a real Windows program (Office Signal.exe) starts the app with no black window
+  $exe = Join-Path $global:dir 'Office Signal.exe'
+  try {
+    $psPart = $launcherText.Substring($launcherText.IndexOf('#==PS==#') + 8)
+    $psPart = $psPart.Replace('$global:launcher = $f', '$global:launcher = Join-Path $PSScriptRoot ''Office Signal.exe''; if (-not (Test-Path $global:launcher)) { $global:launcher = Join-Path $PSScriptRoot ''Office Signal.bat'' }')
+    [IO.File]::WriteAllText((Join-Path $global:dir 'launcher.ps1'), ($psPart -replace "`r?`n", "`r`n"), (New-Object Text.UTF8Encoding $false))
+    $exeMark = Join-Path $global:dir 'launcher.ver'
+    if (-not (Test-Path $exe) -or -not (Test-Path $exeMark) -or ([IO.File]::ReadAllText($exeMark).Trim() -ne '1')) {
+      $src = @'
+using System; using System.Diagnostics; using System.IO;
+static class OfficeSignalLauncher {
+  [STAThread] static void Main() {
+    string d = AppDomain.CurrentDomain.BaseDirectory;
+    string ps = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
+    ProcessStartInfo si = new ProcessStartInfo(ps, "-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + Path.Combine(d, "launcher.ps1") + "\"");
+    si.UseShellExecute = false; si.CreateNoWindow = true; si.WorkingDirectory = d;
+    Process.Start(si);
+  }
+}
+'@
+      $tmpExe = Join-Path $env:TEMP ('os-launch-' + [Guid]::NewGuid().ToString('N') + '.exe')
+      $ok = $false
+      foreach ($withIcon in @($true, $false)) {
+        if ($ok) { break }
+        $prov = New-Object Microsoft.CSharp.CSharpCodeProvider
+        $cp = New-Object System.CodeDom.Compiler.CompilerParameters
+        $cp.GenerateExecutable = $true; $cp.OutputAssembly = $tmpExe
+        [void]$cp.ReferencedAssemblies.Add('System.dll')
+        $cp.CompilerOptions = '/target:winexe /optimize'
+        if ($withIcon -and (Test-Path $global:icoPath)) { $cp.CompilerOptions += ' /win32icon:"' + $global:icoPath + '"' }
+        $res = $prov.CompileAssemblyFromSource($cp, $src)
+        if (-not $res.Errors.HasErrors -and (Test-Path $tmpExe)) { $ok = $true }
+      }
+      if ($ok) { Copy-Item -LiteralPath $tmpExe -Destination $exe -Force; Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue; [IO.File]::WriteAllText($exeMark, '1') }
+    }
+  } catch {}
+  if (Test-Path $exe) { $stable = $exe }
   if (Test-Path $stable) {
     $global:launcher = $stable
     $desk = [Environment]::GetFolderPath('Desktop')
     $sh = New-Object -ComObject WScript.Shell
     $lnk = $sh.CreateShortcut((Join-Path $desk 'Office Signal.lnk'))
     $lnk.TargetPath = $stable; $lnk.WorkingDirectory = $global:dir
-    $lnk.IconLocation = "$($global:icoPath),0"; $lnk.WindowStyle = 7; $lnk.Description = 'Office Signal'
+    $lnk.IconLocation = "$($global:icoPath),0"; $lnk.WindowStyle = 1; $lnk.Description = 'Office Signal'
     $lnk.Save()
     # start automatically when Windows starts (unless nostartup.txt exists)
     $startupLnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'Office Signal.lnk'
@@ -2116,7 +2154,7 @@ if (Test-Path `$global:appCache) {
     } else {
       $sl = $sh.CreateShortcut($startupLnk)
       $sl.TargetPath = $stable; $sl.WorkingDirectory = $global:dir
-      $sl.IconLocation = "$($global:icoPath),0"; $sl.WindowStyle = 7; $sl.Description = 'Office Signal'
+      $sl.IconLocation = "$($global:icoPath),0"; $sl.WindowStyle = 1; $sl.Description = 'Office Signal'
       $sl.Save()
     }
     # show it like an installed app: Start menu (and Windows search) + Settings > Apps
@@ -2124,7 +2162,7 @@ if (Test-Path `$global:appCache) {
       $sm = Join-Path ([Environment]::GetFolderPath('Programs')) 'Office Signal.lnk'
       $ml = $sh.CreateShortcut($sm)
       $ml.TargetPath = $stable; $ml.WorkingDirectory = $global:dir
-      $ml.IconLocation = "$($global:icoPath),0"; $ml.WindowStyle = 7; $ml.Description = 'Office Signal'
+      $ml.IconLocation = "$($global:icoPath),0"; $ml.WindowStyle = 1; $ml.Description = 'Office Signal'
       $ml.Save()
       $un = Join-Path $global:dir 'uninstall.ps1'
       $unText = @'
@@ -2150,6 +2188,7 @@ Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
   }
 } catch {}
 
+try { [OsNative]::SetCurrentProcessExplicitAppUserModelID('RedaAdlany.OfficeSignal') | Out-Null } catch {}
 $global:app = New-Object OsApp($global:myName, $global:myCid, $global:topic)
 
 # ---- automatic updates: check the online copy every 20 minutes ----
