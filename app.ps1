@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-25.2'
+$global:appVersion = '2026-11-26.1'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -283,6 +283,31 @@ public static class OsUi {
     return bmp;
   }
   public const string JokeText = "nta 9090lian";
+  public const string CryText = "ti gha b3di mni hal3ar";
+  static Image cry;
+  // a crying face drawn in code, shown above the "cry" message
+  public static Image CryImage() {
+    if (cry != null) return cry;
+    Bitmap b = new Bitmap(180, 140);
+    using (Graphics g = Graphics.FromImage(b)) {
+      g.SmoothingMode = SmoothingMode.AntiAlias;
+      g.Clear(Color.FromArgb(32, 46, 74));
+      float cx = 90, cy = 70, r = 46;
+      using (SolidBrush y = new SolidBrush(Color.FromArgb(255, 200, 61))) g.FillEllipse(y, cx - r, cy - r, r * 2, r * 2);
+      using (SolidBrush t = new SolidBrush(Color.FromArgb(79, 195, 247))) {
+        g.FillRectangle(t, cx - 28, cy - 8, 12, 60); g.FillRectangle(t, cx + 16, cy - 8, 12, 60);
+        g.FillEllipse(t, cx - 40, cy + 40, 36, 24); g.FillEllipse(t, cx + 4, cy + 40, 36, 24);
+      }
+      using (Pen e = new Pen(Color.FromArgb(90, 60, 20), 4f)) {
+        e.StartCap = LineCap.Round; e.EndCap = LineCap.Round;
+        g.DrawArc(e, cx - 32, cy - 22, 20, 16, 200, 140); g.DrawArc(e, cx + 12, cy - 22, 20, 16, 200, 140);
+        g.DrawLine(e, cx - 30, cy - 30, cx - 16, cy - 34); g.DrawLine(e, cx + 16, cy - 34, cx + 30, cy - 30);
+      }
+      using (SolidBrush m = new SolidBrush(Color.FromArgb(90, 40, 20))) g.FillEllipse(m, cx - 14, cy + 6, 28, 22);
+      using (SolidBrush tg = new SolidBrush(Color.FromArgb(230, 90, 90))) g.FillEllipse(tg, cx - 8, cy + 18, 16, 10);
+    }
+    cry = b; return cry;
+  }
   static Image joke;
   public static Image JokeImage() {
     if (joke == null) { try { joke = Image.FromStream(new MemoryStream(Convert.FromBase64String(JokeB64))); } catch { } }
@@ -383,6 +408,13 @@ public class IconBtn : Control {
           g.FillEllipse(Brushes.Gold, cx - 4, cy - 4, 2.4f, 2.4f);
           g.FillEllipse(Brushes.Gold, cx + 1.6f, cy - 4, 2.4f, 2.4f);
         }
+      } else if (Kind == "cry") {
+        using (Pen jp = new Pen(OsUi.Yellow, 1.8f)) {
+          g.DrawEllipse(jp, cx - 8, cy - 8, 16, 16);
+          g.DrawArc(jp, cx - 4.5f, cy + 1.5f, 9, 6, 200, 140);
+          g.DrawArc(jp, cx - 5.5f, cy - 5, 4, 3, 200, 140); g.DrawArc(jp, cx + 1.5f, cy - 5, 4, 3, 200, 140);
+        }
+        using (SolidBrush tb = new SolidBrush(Color.FromArgb(79, 195, 247))) { g.FillEllipse(tb, cx - 5.5f, cy - 1.5f, 2.6f, 4.5f); g.FillEllipse(tb, cx + 3f, cy - 1.5f, 2.6f, 4.5f); }
       } else if (Kind == "gear") {
         g.DrawEllipse(pen, cx - 3, cy - 3, 6, 6);
         for (int i = 0; i < 8; i++) {
@@ -434,8 +466,10 @@ public class ChatView : Control {
     for (int i = 0; i < Items.Count; i++) { if (Items[i].Mine && Items[i].Time <= SeenUpTo) idx = i; }
     return idx;
   }
-  Size JokeSize() {
-    Image im = OsUi.JokeImage();
+  Size JokeSize() { return JokeSize("joke"); }
+  static Image PicFor(string type) { return type == "cry" ? OsUi.CryImage() : OsUi.JokeImage(); }
+  Size JokeSize(string type) {
+    Image im = PicFor(type);
     if (im == null) return new Size(0, 0);
     int w = Math.Min(180, MaxBubble());
     return new Size(w, w * im.Height / im.Width);
@@ -468,7 +502,7 @@ public class ChatView : Control {
   int ItemHeight(OsMsg m, bool vu) {
     if (m.Type == "shot") return ShotSize().Height + 4 + 16 + 8 + (vu ? 18 : 0);
     int h = OsUi.IsChip(m.Type) ? 30 + 4 + 16 + 12 : BubbleSize(m).Height + 4 + 16 + 8;
-    if (m.Type == "joke") h += JokeSize().Height + 6;
+    if (m.Type == "joke" || m.Type == "cry") h += JokeSize(m.Type).Height + 6;
     if (vu) h += 18;
     return h;
   }
@@ -536,12 +570,12 @@ public class ChatView : Control {
         TextRenderer.DrawText(g, meta, fMeta, new Rectangle(0, y + 34, Width, 16), OsUi.Mute, TextFormatFlags.HorizontalCenter);
       } else {
         int y0 = y;
-        if (m.Type == "joke") {
-          Size js = JokeSize();
+        if (m.Type == "joke" || m.Type == "cry") {
+          Size js = JokeSize(m.Type);
           if (js.Width > 0) {
             int jx = m.Mine ? Width - 14 - js.Width : 14;
             using (GraphicsPath p = OsUi.Round(new Rectangle(jx, y, js.Width, js.Height), 16)) {
-              Region old = g.Clip; g.SetClip(p); g.DrawImage(OsUi.JokeImage(), new Rectangle(jx, y, js.Width, js.Height)); g.Clip = old;
+              Region old = g.Clip; g.SetClip(p); g.DrawImage(PicFor(m.Type), new Rectangle(jx, y, js.Width, js.Height)); g.Clip = old;
             }
             y += js.Height + 6;
           }
@@ -628,7 +662,7 @@ public class ChatForm : Form {
   Panel sig, bottom;
   RoundBtn bRed, bYel, bGrn;
   TextBox input;
-  IconBtn sendBtn, jokeBtn, shotBtn;
+  IconBtn sendBtn, jokeBtn, shotBtn, cryBtn;
   public bool Quitting;
   bool wide;
   SettingsView settings;
@@ -662,6 +696,8 @@ public class ChatForm : Form {
     input.MaxLength = 2000;
     sendBtn = new IconBtn("send"); sendBtn.BackColor = OsUi.Box;
     jokeBtn = new IconBtn("joke"); jokeBtn.BackColor = OsUi.Box;
+    cryBtn = new IconBtn("cry"); cryBtn.BackColor = OsUi.Box; bottom.Controls.Add(cryBtn);
+    cryBtn.Click += delegate { App.Send(OsUi.CryText, "cry"); App.PlayCry(); FocusInput(); };
     shotBtn = new IconBtn("screen"); shotBtn.BackColor = OsUi.Box;
     bottom.Controls.Add(input); bottom.Controls.Add(sendBtn); bottom.Controls.Add(jokeBtn); bottom.Controls.Add(shotBtn);
     shotBtn.Click += delegate {
@@ -719,7 +755,7 @@ public class ChatForm : Form {
   public void ApplyTheme() {
     BackColor = OsUi.Line;
     foreach (Control c in new Control[] { Head, sig, View, bottom, Head.Gear, Head.Min, Head.Expand, Head.Close, bRed, bYel, bGrn }) { c.BackColor = OsUi.Bg; c.Invalidate(); }
-    input.BackColor = OsUi.Box; input.ForeColor = OsUi.Ink; sendBtn.BackColor = OsUi.Box; sendBtn.Invalidate(); jokeBtn.BackColor = OsUi.Box; jokeBtn.Invalidate(); shotBtn.BackColor = OsUi.Box; shotBtn.Invalidate();
+    input.BackColor = OsUi.Box; input.ForeColor = OsUi.Ink; sendBtn.BackColor = OsUi.Box; sendBtn.Invalidate(); jokeBtn.BackColor = OsUi.Box; jokeBtn.Invalidate(); cryBtn.BackColor = OsUi.Box; cryBtn.Invalidate(); shotBtn.BackColor = OsUi.Box; shotBtn.Invalidate();
     settings.ApplyTheme();
     Invalidate(true);
   }
@@ -731,8 +767,9 @@ public class ChatForm : Form {
   }
   void LayoutBottom() {
     int boxW = bottom.Width - 24;
-    input.Bounds = new Rectangle(28, 12 + (48 - input.PreferredHeight) / 2, boxW - 16 - 124, input.PreferredHeight);
-    shotBtn.Bounds = new Rectangle(12 + boxW - 124, 18, 36, 36);
+    input.Bounds = new Rectangle(28, 12 + (48 - input.PreferredHeight) / 2, boxW - 16 - 164, input.PreferredHeight);
+    shotBtn.Bounds = new Rectangle(12 + boxW - 164, 18, 36, 36);
+    cryBtn.Bounds = new Rectangle(12 + boxW - 124, 18, 36, 36);
     jokeBtn.Bounds = new Rectangle(12 + boxW - 84, 18, 36, 36);
     sendBtn.Bounds = new Rectangle(12 + boxW - 44, 18, 36, 36);
   }
@@ -1460,11 +1497,11 @@ public class OsApp : ApplicationContext {
   public static int VoiceIndex(string kind) { if (kind == "red") return 0; if (kind == "yellow") return 1; if (kind == "green") return 2; if (kind == "msg") return 3; return -1; }
   // recorded voices (sounds\red.mp3, yellow.mp3, green.mp3), downloaded from GitHub once
   // change SoundsVer when the files in sounds/ on GitHub change, so both PCs download them again
-  const string SoundsVer = "3";
+  const string SoundsVer = "4";
   string SoundDir() { return Path.Combine(Path.Combine(cfgDir, "sounds"), SoundsVer); }
   public void FetchSounds() {
     ThreadPool.QueueUserWorkItem(delegate {
-      foreach (string k in new string[] { "red", "yellow", "green", "msg", "joke" }) {
+      foreach (string k in new string[] { "red", "yellow", "green", "msg", "joke", "cry" }) {
         try {
           string f = Path.Combine(SoundDir(), k + ".wav");
           if (File.Exists(f) && new FileInfo(f).Length > 1000) continue;
@@ -1653,6 +1690,7 @@ public class OsApp : ApplicationContext {
     if (MusicRole == "send") { if (c == "playpause") MusicPaused = !MusicPaused; PressMedia(c); RefreshMusicUi(); }
   }
   public void PlayJoke() { Duck(); if (VoiceOn) PlayFile("joke"); }
+  public void PlayCry() { Duck(); if (VoiceOn) PlayFile("cry"); }
   void StartAlert(string kind, string from, string text) { StartAlert(kind, from, text, true); }
   void StartAlert(string kind, string from, string text, bool speak) {
     if (kind != "music") Duck();
@@ -1929,9 +1967,10 @@ public class OsApp : ApplicationContext {
       Pill.Invalidate();
     } else if (live && !m.Mine) {
       if (m.Type == "joke") PlayJoke();
+      if (m.Type == "cry") PlayCry();
       if (m.Type == "music") { MusicOffer = m.Name; offerSeen = DateTime.Now; if (Strip != null) Strip.Follow(); StartAlert("music", m.Name, "", false); litText["music"] = m.Name + " is sharing music - click to listen"; Pill.Invalidate(); return; }
       if (OsUi.IsSignal(m.Type)) StartAlert(m.Type, m.Name, m.Text);
-      else if (!ChatActive()) { Unread++; StartAlert("msg", m.Name, m.Text, m.Type != "joke"); }
+      else if (!ChatActive()) { Unread++; StartAlert("msg", m.Name, m.Text, m.Type != "joke" && m.Type != "cry"); }
       Pill.Invalidate();
     }
   }
