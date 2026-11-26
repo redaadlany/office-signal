@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-26.4'
+$global:appVersion = '2026-11-26.5'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -2106,19 +2106,42 @@ if (Test-Path `$global:appCache) {
   $exe = Join-Path $global:dir 'Office Signal.exe'
   try {
     $psPart = $launcherText.Substring($launcherText.IndexOf('#==PS==#') + 8)
-    $psPart = $psPart.Replace('$global:launcher = $f', '$global:launcher = Join-Path $PSScriptRoot ''Office Signal.exe''; if (-not (Test-Path $global:launcher)) { $global:launcher = Join-Path $PSScriptRoot ''Office Signal.bat'' }')
+    $psPart = $psPart.Replace('$global:launcher = $f', 'if ($global:OsExe) { $global:launcher = $global:OsExe } else { $global:launcher = Join-Path $PSScriptRoot ''Office Signal.exe''; if (-not (Test-Path $global:launcher)) { $global:launcher = Join-Path $PSScriptRoot ''Office Signal.bat'' } }')
     [IO.File]::WriteAllText((Join-Path $global:dir 'launcher.ps1'), ($psPart -replace "`r?`n", "`r`n"), (New-Object Text.UTF8Encoding $false))
     $exeMark = Join-Path $global:dir 'launcher.ver'
-    if (-not (Test-Path $exe) -or -not (Test-Path $exeMark) -or ([IO.File]::ReadAllText($exeMark).Trim() -ne '1')) {
+    if (-not (Test-Path $exe) -or -not (Test-Path $exeMark) -or ([IO.File]::ReadAllText($exeMark).Trim() -ne '2')) {
       $src = @'
-using System; using System.Diagnostics; using System.IO;
+using System; using System.Diagnostics; using System.IO; using System.Threading;
+using System.Management.Automation; using System.Management.Automation.Runspaces;
 static class OfficeSignalLauncher {
   [STAThread] static void Main() {
     string d = AppDomain.CurrentDomain.BaseDirectory;
-    string ps = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
-    ProcessStartInfo si = new ProcessStartInfo(ps, "-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + Path.Combine(d, "launcher.ps1") + "\"");
-    si.UseShellExecute = false; si.CreateNoWindow = true; si.WorkingDirectory = d;
-    Process.Start(si);
+    string f = Path.Combine(d, "launcher.ps1");
+    string exe = Path.Combine(d, "Office Signal.exe");
+    Runspace rs = null;
+    try {
+      InitialSessionState iss = InitialSessionState.CreateDefault();
+      iss.ApartmentState = ApartmentState.STA;
+      iss.ThreadOptions = PSThreadOptions.UseCurrentThread;
+      rs = RunspaceFactory.CreateRunspace(iss);
+      rs.Open();
+    } catch { rs = null; }
+    if (rs == null) {
+      // could not run PowerShell inside this program: start it the old way, hidden
+      string ps = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
+      ProcessStartInfo si = new ProcessStartInfo(ps, "-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + f + "\"");
+      si.UseShellExecute = false; si.CreateNoWindow = true; si.WorkingDirectory = d;
+      Process.Start(si);
+      return;
+    }
+    try {
+      using (PowerShell ps = PowerShell.Create()) {
+        ps.Runspace = rs;
+        ps.AddScript("$global:OsExe = '" + exe.Replace("'", "''") + "'\r\n" + File.ReadAllText(f));
+        ps.Invoke();
+      }
+    } catch { }
+    try { rs.Close(); } catch { }
   }
 }
 '@
@@ -2130,12 +2153,14 @@ static class OfficeSignalLauncher {
         $cp = New-Object System.CodeDom.Compiler.CompilerParameters
         $cp.GenerateExecutable = $true; $cp.OutputAssembly = $tmpExe
         [void]$cp.ReferencedAssemblies.Add('System.dll')
+        [void]$cp.ReferencedAssemblies.Add('System.Core.dll')
+        [void]$cp.ReferencedAssemblies.Add([PSObject].Assembly.Location)
         $cp.CompilerOptions = '/target:winexe /optimize'
         if ($withIcon -and (Test-Path $global:icoPath)) { $cp.CompilerOptions += ' /win32icon:"' + $global:icoPath + '"' }
         $res = $prov.CompileAssemblyFromSource($cp, $src)
         if (-not $res.Errors.HasErrors -and (Test-Path $tmpExe)) { $ok = $true }
       }
-      if ($ok) { Copy-Item -LiteralPath $tmpExe -Destination $exe -Force; Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue; [IO.File]::WriteAllText($exeMark, '1') }
+      if ($ok) { Copy-Item -LiteralPath $tmpExe -Destination $exe -Force; Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue; [IO.File]::WriteAllText($exeMark, '2') }
     }
   } catch {}
   if (Test-Path $exe) { $stable = $exe }
