@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 try {
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$global:appVersion = '2026-11-26.6'
+$global:appVersion = '2026-11-27.1'
 
 function Get-VerNum([string]$v) { try { $q = $v.Trim().Split('.'); return ([int64]($q[0].Replace('-', '')) * 1000 + [int64]$q[1]) } catch { return [int64]0 } }
 function Get-TextVer([string]$t) { if ($t -match "appVersion = '([^']+)'") { return $matches[1] } else { return '' } }
@@ -2105,7 +2105,7 @@ if (Test-Path `$global:appCache) {
   # a real Windows program (Office Signal.exe) starts the app with no black window
   $exe = Join-Path $global:dir 'Office Signal.exe'
   try {
-    $psPart = $launcherText.Substring($launcherText.IndexOf('#==PS==#') + 8)
+    $psPart = $launcherText.Substring($launcherText.LastIndexOf('#==PS==#') + 8)
     $psPart = $psPart.Replace('$global:launcher = $f', 'if ($global:OsExe) { $global:launcher = $global:OsExe } else { $global:launcher = Join-Path $PSScriptRoot ''Office Signal.exe''; if (-not (Test-Path $global:launcher)) { $global:launcher = Join-Path $PSScriptRoot ''Office Signal.bat'' } }')
     [IO.File]::WriteAllText((Join-Path $global:dir 'launcher.ps1'), ($psPart -replace "`r?`n", "`r`n"), (New-Object Text.UTF8Encoding $false))
     $exeMark = Join-Path $global:dir 'launcher.ver'
